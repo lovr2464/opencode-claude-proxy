@@ -1,0 +1,14 @@
+{
+  "name": "opencode-go-claude-proxy",
+  "version": "1.0.0",
+  "description": "Anthropic Messages API compatible Claude Code proxy for OpenCode Go",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js",
+    "test": "node --test",
+    "doctor": "node scripts/doctor.mjs",
+    "claude:print-env": "node scripts/print-claude-env.mjs"
+  }
+}
