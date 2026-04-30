@@ -44,9 +44,10 @@ function parseSse(text) {
     });
 }
 
-async function startProxy(upstreamBaseUrl) {
+async function startProxy(upstreamBaseUrl, overrides = {}) {
   const server = createProxyServer({
     apiKey: "test-key",
+    authMode: "proxy",
     host: "127.0.0.1",
     port: 0,
     upstreamBaseUrl,
@@ -56,6 +57,7 @@ async function startProxy(upstreamBaseUrl) {
     requestTimeoutMs: 5000,
     toolChoicePolicy: "auto-on-forced",
     logLevel: "silent",
+    ...overrides,
   });
   const baseUrl = await listen(server);
   return { server, baseUrl };
@@ -93,6 +95,39 @@ test("proxies non-streaming messages through mock OpenAI upstream", async () => 
     assert.equal(upstream.requests[0].url, "/chat/completions");
     assert.equal(upstream.requests[0].body.model, "kimi-k2.6");
     assert.equal(upstream.requests[0].body.messages[0].role, "system");
+    assert.equal(upstream.requests[0].headers["accept-encoding"], undefined);
+  } finally {
+    await close(proxy.server);
+    await close(upstream.server);
+  }
+});
+
+test("passes downstream API key upstream in passthrough auth mode", async () => {
+  const upstream = await startMockUpstream((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        id: "chatcmpl_auth",
+        choices: [{ finish_reason: "stop", message: { role: "assistant", content: "auth-ok" } }],
+        usage: { prompt_tokens: 1, completion_tokens: 2 },
+      }),
+    );
+  });
+  const proxy = await startProxy(upstream.baseUrl, { authMode: "passthrough" });
+
+  try {
+    const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": "real-downstream-key" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(upstream.requests[0].headers.authorization, "Bearer real-downstream-key");
   } finally {
     await close(proxy.server);
     await close(upstream.server);

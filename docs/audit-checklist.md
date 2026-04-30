@@ -68,6 +68,20 @@ PORT=8788 npm run claude:print-env
 ```
 
 Apply the printed variables in a shell, then start Claude Code from that shell.
+Claude Code should know the proxy address and the model name it should display.
+This model name should match `DEFAULT_MODEL` in the proxy `.env`.
+
+For `AUTH_MODE=passthrough`, Claude Code's `ANTHROPIC_API_KEY` must be the real
+OpenCode Go key.
+
+If Claude Code requires a custom API key for a custom base URL, use:
+
+```bash
+PORT=8788 npm run claude:print-env -- --with-placeholder-key
+```
+
+Use that placeholder only with `AUTH_MODE=proxy`.
+
 Run a small file-inspection or command task and confirm tool calls complete.
 
 ## 6. Publish Gate

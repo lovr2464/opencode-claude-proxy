@@ -18,20 +18,51 @@ Upstream OpenCode Go receives:
 - `Authorization: Bearer <OPENCODE_API_KEY>`
 - OpenAI Chat Completions message and tool schemas
 
+## Product Boundary
+
+In `AUTH_MODE=passthrough`, Claude Code owns:
+
+- the OpenCode Go API key
+- the model name it should display and request
+
+The proxy owns:
+
+- the OpenCode Go base URL
+- protocol conversion
+- optional model aliases or mappings
+
+In `AUTH_MODE=proxy`, proxy configuration owns:
+
+- the real OpenCode Go API key
+- the OpenCode Go base URL
+- the default model name
+- optional model aliases or mappings
+
+Claude Code then only needs the proxy base URL, displayed model name, and a
+placeholder key if the client refuses to run without one.
+
 ## Model Mapping
 
-Claude Code can request Claude-facing model names. The proxy maps those names to
-actual OpenCode Go model names through `MODEL_MAP`.
+By default, Claude Code should request the same model name that OpenCode Go
+uses, so the Claude Code UI displays the real model in use.
 
 Example:
 
 ```env
-DEFAULT_MODEL=claude-sonnet-4-5
-MODEL_MAP=claude-sonnet-4-5=kimi-k2.6,claude-opus-4-5=kimi-k2.6
+DEFAULT_MODEL=kimi-k2.6
+MODELS=kimi-k2.6
+```
+
+If a provider needs a different upstream model id from the model name shown in
+Claude Code, configure `MODEL_MAP` explicitly:
+
+```env
+DEFAULT_MODEL=kimi-k2.6
+MODEL_MAP=kimi-k2.6=moonshotai/kimi-k2.6-20260420
 ```
 
 The upstream request uses the mapped model. The Anthropic response reports the
-Claude-facing requested model so Claude Code gets a stable model identity.
+model requested by Claude Code so the UI stays stable.
 
 ## Message Conversion
 

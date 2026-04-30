@@ -67,6 +67,21 @@ test("maps Claude-facing model names to upstream model names", () => {
   assert.equal(body.tool_choice, "auto");
 });
 
+test("passes through real model names when no mapping is configured", () => {
+  const { requestedModel, upstreamModel, body } = buildOpenAIRequest(
+    {
+      model: "kimi-k2.6",
+      max_tokens: 128,
+      messages: [{ role: "user", content: "hi" }],
+    },
+    { ...config, modelMap: new Map() },
+  );
+
+  assert.equal(requestedModel, "kimi-k2.6");
+  assert.equal(upstreamModel, "kimi-k2.6");
+  assert.equal(body.model, "kimi-k2.6");
+});
+
 test("converts OpenAI tool_calls response to Anthropic tool_use", () => {
   const response = openAIResponseToAnthropic(
     {

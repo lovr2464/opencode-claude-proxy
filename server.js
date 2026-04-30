@@ -33,6 +33,7 @@ export function buildConfig(env = { ...loadEnv(), ...process.env }) {
 
   return {
     apiKey: env.OPENCODE_API_KEY || env.OPENAI_API_KEY || "",
+    authMode: env.AUTH_MODE || "passthrough",
     port: Number.parseInt(env.PORT || "8787", 10),
     host: env.HOST || "127.0.0.1",
     upstreamBaseUrl: baseUrl.replace(/\/$/, ""),
@@ -462,19 +463,41 @@ export function createStreamConverter(model, onEvent) {
   };
 }
 
+function downstreamApiKey(headers) {
+  const xApiKey = headers["x-api-key"];
+  if (Array.isArray(xApiKey)) return xApiKey[0];
+  if (xApiKey) return xApiKey;
+
+  const auth = headers.authorization;
+  const value = Array.isArray(auth) ? auth[0] : auth;
+  if (!value) return "";
+  return value.replace(/^Bearer\s+/i, "").trim();
+}
+
+function resolveUpstreamApiKey(config, headers) {
+  if (config.authMode === "proxy") return config.apiKey;
+  return downstreamApiKey(headers);
+}
+
 function upstreamHeaders(config, headers, bodyStr) {
+  const apiKey = resolveUpstreamApiKey(config, headers);
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${config.apiKey}`,
+    Authorization: `Bearer ${apiKey}`,
     "Content-Length": Buffer.byteLength(bodyStr || ""),
     ...Object.fromEntries(
-      Object.entries(headers).filter(([key]) => !["host", "x-api-key", "authorization", "content-length", "transfer-encoding", "anthropic-version", "anthropic-beta"].includes(key.toLowerCase())),
+      Object.entries(headers).filter(([key]) => !["host", "x-api-key", "authorization", "content-length", "transfer-encoding", "connection", "accept-encoding", "anthropic-version", "anthropic-beta"].includes(key.toLowerCase())),
     ),
   };
 }
 
 function upstreamRequest(config, method, requestPath, headers, bodyStr) {
   return new Promise((resolve, reject) => {
+    if (!resolveUpstreamApiKey(config, headers)) {
+      reject(Object.assign(new Error(`Missing API key for AUTH_MODE=${config.authMode}`), { statusCode: 401, errorType: "authentication_error" }));
+      return;
+    }
+
     const url = new URL(config.upstreamBaseUrl + requestPath);
     const req = (url.protocol === "https:" ? https : http).request(
       {
@@ -521,8 +544,9 @@ async function handleMessages(config, req, res, url) {
     try {
       upstream = await upstreamRequest(config, "POST", "/chat/completions", req.headers, bodyStr);
     } catch (error) {
-      log(config, "UPSTREAM", upstreamModel, 502, error.message);
-      return sendJson(res, 502, anthropicError(502, error.message, "upstream_error").body);
+      const status = error.statusCode || 502;
+      log(config, "UPSTREAM", upstreamModel, status, error.message);
+      return sendJson(res, status, anthropicError(status, error.message, error.errorType || "upstream_error").body);
     }
 
     if (upstream.statusCode >= 400) {
@@ -573,8 +597,9 @@ async function handleMessages(config, req, res, url) {
   try {
     upstream = await upstreamRequest(config, "POST", "/chat/completions", req.headers, bodyStr);
   } catch (error) {
-    log(config, "UPSTREAM", upstreamModel, 502, error.message);
-    return sendJson(res, 502, anthropicError(502, error.message, "upstream_error").body);
+    const status = error.statusCode || 502;
+    log(config, "UPSTREAM", upstreamModel, status, error.message);
+    return sendJson(res, status, anthropicError(status, error.message, error.errorType || "upstream_error").body);
   }
 
   const respBody = await readBody(upstream);
@@ -603,6 +628,7 @@ export function createProxyServer(config = buildConfig()) {
         default_model: config.defaultModel,
         models: config.models,
         model_map: Object.fromEntries(config.modelMap),
+        auth_mode: config.authMode,
         tool_choice_policy: config.toolChoicePolicy,
       });
     }

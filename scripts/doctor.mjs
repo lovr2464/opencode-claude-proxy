@@ -9,8 +9,9 @@ console.log("----------------------------------");
 console.log(`local:  ${baseUrl}`);
 console.log(`target: ${config.upstreamBaseUrl}`);
 console.log(`model:  ${config.defaultModel}`);
+console.log(`auth:   ${config.authMode}`);
 console.log(`tools:  ${config.toolChoicePolicy}`);
-console.log(`key:    ${config.apiKey ? "present" : "missing"}`);
+console.log(`key:    ${config.authMode === "proxy" ? (config.apiKey ? "present" : "missing") : "managed by Claude Code"}`);
 
 async function check(url, label) {
   try {
