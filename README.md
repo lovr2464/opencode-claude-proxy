@@ -1,117 +1,122 @@
-# OpenCode Go Claude Proxy
+# OpenAI-to-Anthropic API Adapter
 
-Anthropic Messages API compatible proxy for using an OpenCode Go package from
-Claude Code.
+[中文说明](docs/README_zh.md) | [Design](docs/design.md) | [设计文档](docs/design_zh.md)
 
-Claude Code talks to this local service as if it were an Anthropic-compatible
-API. The proxy translates requests to OpenAI Chat Completions and forwards them
-to OpenCode Go.
+A local adapter that exposes an Anthropic Messages API surface and forwards requests to an OpenAI-compatible Chat Completions endpoint.
 
-## Status
+Some providers expose useful models only through an OpenAI-compatible API. For example, OpenCode Go may provide models such as Kimi, DeepSeek, or Qwen through an OpenAI-style endpoint; this adapter lets Claude Code use those models by translating Anthropic API requests and responses.
 
-Implemented:
+## Quick Start
 
-- `POST /v1/messages`
-- `GET /v1/models`
-- `GET /health`
-- non-streaming text responses
-- Anthropic SSE streaming
-- custom tool calls and tool results
-- Claude-facing model names mapped to OpenCode Go model names
-- passthrough or proxy-managed upstream API keys
-- Anthropic-shaped errors
-- local mock upstream tests
+1. Edit `settings.json`.
 
-## Setup
+Keep the committed file as a template when publishing. Do not commit a real upstream API key.
+
+```json
+{
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "authMode": "proxy",
+    "requestTimeoutMs": 300000,
+    "logLevel": "info"
+  },
+  "upstream": {
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "apiKey": "your-opencode-go-api-key"
+  },
+  "model": {
+    "claudeId": "opencode-go",
+    "upstreamId": "kimi-k2.6",
+    "list": ["opencode-go"],
+    "map": {
+      "opencode-go": "kimi-k2.6"
+    }
+  }
+}
+```
+
+2. Start the adapter.
 
 ```bash
-cp .env.example .env
+./start.sh
 ```
 
-Edit `.env`. The model name here is the model Claude Code should display and
-request:
-
-```env
-OPENCODE_API_KEY=your-opencode-go-api-key
-OPENCODE_BASE_URL=https://opencode.ai/zen/go/v1
-AUTH_MODE=passthrough
-DEFAULT_MODEL=kimi-k2.6
-MODELS=kimi-k2.6
-```
-
-With `AUTH_MODE=passthrough`, Claude Code owns the OpenCode Go API key and the
-proxy only forwards it upstream.
-
-Start the proxy:
+You can also start it directly:
 
 ```bash
-npm start
+node server.js
 ```
 
-Check it:
+By default it listens on `http://127.0.0.1:8787`.
 
-```bash
-npm run doctor
+## Configure Claude Code
+
+Configure Claude Code's own settings file to point to the local adapter. Use a placeholder API key and the same placeholder model name as `model.claudeId` in `settings.json`.
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_API_KEY": "opencode-go-local",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "opencode-go",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opencode-go",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "opencode-go",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opencode-go",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "opencode-go",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "OpenAI-compatible model via local adapter",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Anthropic Messages API backed by an OpenAI-compatible endpoint"
+  }
+}
 ```
 
-## Claude Code
+With the recommended `proxy.authMode: "proxy"`, Claude Code only sees `opencode-go-local`; the real upstream key stays in this project's `settings.json`.
 
-Print the environment variables Claude Code needs. These variables tell Claude
-Code which local proxy and model name to use. The same model name should be set
-in the proxy `.env`, so Claude Code displays the real model being used.
+## Settings Reference
 
-```bash
-npm run claude:print-env
-```
-
-Typical output:
-
-```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
-export ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.6
-export ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.6
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.6
-export CLAUDE_CODE_SUBAGENT_MODEL=kimi-k2.6
-```
-
-For `AUTH_MODE=passthrough`, set Claude Code's `ANTHROPIC_API_KEY` to the real
-OpenCode Go key.
-
-For `AUTH_MODE=proxy`, keep the real key in `.env` as `OPENCODE_API_KEY`. If
-Claude Code requires an API key for a custom `ANTHROPIC_BASE_URL`, you can print
-an explicit placeholder:
-
-```bash
-npm run claude:print-env -- --with-placeholder-key
-```
-
-In `proxy` mode, the proxy does not trust or forward Claude Code's downstream
-API key. It always uses `OPENCODE_API_KEY` from `.env` for upstream requests.
-
-## Configuration
-
-| Variable | Purpose |
+| Setting | Meaning |
 | --- | --- |
-| `AUTH_MODE` | `passthrough` or `proxy` |
-| `OPENCODE_API_KEY` | OpenCode Go API key used upstream when `AUTH_MODE=proxy` |
-| `OPENCODE_BASE_URL` | OpenAI-compatible base URL, usually `https://opencode.ai/zen/go/v1` |
-| `HOST` / `PORT` | Local listen address |
-| `DEFAULT_MODEL` | Claude-facing default model |
-| `MODELS` | Models returned by `/v1/models` |
-| `MODEL_MAP` | Optional comma-separated `displayed_model=upstream_model` pairs |
-| `TOOL_CHOICE_POLICY` | `auto-on-forced`, `passthrough`, or `drop` |
-| `REQUEST_TIMEOUT_MS` | Upstream request timeout |
-| `LOG_LEVEL` | `info` or `silent` |
+| `proxy.host` | Local listen host. Use `127.0.0.1` for local-only access. |
+| `proxy.port` | Local listen port. Claude Code's `ANTHROPIC_BASE_URL` must use this port. |
+| `proxy.authMode` | `proxy` keeps the real upstream key in `settings.json`; `passthrough` forwards Claude Code's `ANTHROPIC_API_KEY` upstream. |
+| `proxy.requestTimeoutMs` | Timeout for upstream requests, in milliseconds. |
+| `proxy.logLevel` | `info` logs startup and request errors; `silent` reduces logs. |
+| `upstream.baseUrl` | OpenAI-compatible API base URL. The adapter calls `${baseUrl}/chat/completions`. |
+| `upstream.apiKey` | Real upstream API key when `authMode` is `proxy`. |
+| `model.claudeId` | Placeholder model id used by Claude Code. |
+| `model.upstreamId` | Real upstream model id. Used as the default mapping target. |
+| `model.list` | Models returned by `/v1/models` to Claude Code. Usually just the placeholder id. |
+| `model.map` | Maps Claude-facing model ids to real upstream model ids. |
+
+The default protocol behavior is intentionally opinionated for Claude Code:
+
+- Anthropic `tool_choice: any` and `tool_choice: tool` are downgraded to OpenAI `tool_choice: auto` for reasoning-model compatibility.
+- Anthropic thinking blocks and OpenAI `reasoning_content` / `reasoning` fields are converted both ways.
+- Streaming SSE events are translated into Anthropic Messages API event order.
+
+## Endpoints
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/v1/messages` | POST | Anthropic Messages-compatible chat endpoint. Supports streaming and non-streaming requests. |
+| `/v1/models` | GET | Anthropic-shaped model list based on `model.list`. |
+| `/health` | GET | Health check with non-secret configuration summary. |
 
 ## Development
 
 ```bash
 npm run check
 npm test
+npm run dev
+npm run doctor
 ```
 
-The tests use a local mock OpenAI upstream and do not call OpenCode Go.
+Tests use a local mock upstream and do not require an API key.
 
 ## Design
 
-See [docs/protocol-adapter-design.md](docs/protocol-adapter-design.md).
+For architecture, protocol mapping, streaming behavior, and known limits, see [docs/design.md](docs/design.md). The Chinese version is [docs/design_zh.md](docs/design_zh.md).
+
+## License
+
+MIT

@@ -1,17 +1,17 @@
-import { buildConfig, loadEnv } from "../server.js";
+import { buildConfig, loadConfigSources } from "../src/config.js";
 
-const env = { ...loadEnv(), ...process.env };
-const config = buildConfig(env);
+const config = buildConfig(loadConfigSources());
 const baseUrl = `http://${config.host}:${config.port}`;
 
-console.log("OpenCode Go Claude Proxy doctor");
-console.log("----------------------------------");
+console.log("OpenAI-to-Anthropic API Adapter doctor");
+console.log("---------------------------------------");
 console.log(`local:  ${baseUrl}`);
 console.log(`target: ${config.upstreamBaseUrl}`);
 console.log(`model:  ${config.defaultModel}`);
 console.log(`auth:   ${config.authMode}`);
-console.log(`tools:  ${config.toolChoicePolicy}`);
-console.log(`key:    ${config.authMode === "proxy" ? (config.apiKey ? "present" : "missing") : "managed by Claude Code"}`);
+console.log(`tools:    ${config.toolChoicePolicy}`);
+console.log(`reason:   ${config.reasoningMode}`);
+console.log(`key:      ${config.authMode === "proxy" ? (config.apiKey ? "present" : "missing") : "managed by Claude Code"}`);
 
 async function check(url, label) {
   try {

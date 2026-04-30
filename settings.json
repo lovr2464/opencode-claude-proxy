@@ -1,0 +1,21 @@
+{
+  "proxy": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "authMode": "proxy",
+    "requestTimeoutMs": 300000,
+    "logLevel": "info"
+  },
+  "upstream": {
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "apiKey": "your-opencode-go-api-key"
+  },
+  "model": {
+    "claudeId": "opencode-go",
+    "upstreamId": "kimi-k2.6",
+    "list": ["opencode-go"],
+    "map": {
+      "opencode-go": "kimi-k2.6"
+    }
+  }
+}

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildOpenAIRequest, convertMessages, createStreamConverter, openAIResponseToAnthropic } from "../server.js";
+import { buildOpenAIRequest, convertMessages, openAIResponseToAnthropic } from "../src/convert.js";
+import { createStreamConverter } from "../src/stream.js";
 
 const config = {
   defaultModel: "kimi-k2.6",
@@ -37,6 +38,7 @@ test("converts system, assistant text, tool_use, and tool_result blocks", () => 
     {
       role: "assistant",
       content: "I will check it.",
+      reasoning_content: " ",
       tool_calls: [
         {
           id: "toolu_1",
@@ -170,4 +172,232 @@ test("streams parallel tool calls by OpenAI index", () => {
   }
 
   assert.deepEqual([...deltasByIndex.values()].sort(), ["{\"x\":1}", "{\"y\":2}"]);
+});
+
+test("buffers streamed tool arguments until the tool name is known", () => {
+  const events = [];
+  const converter = createStreamConverter("claude-sonnet-4-5", (event, data) => events.push({ event, data }));
+
+  converter.processChunk({
+    choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{\"command\"" } }] }, finish_reason: null }],
+  });
+  converter.processChunk({
+    choices: [{ delta: { tool_calls: [{ index: 0, id: "call_late", function: { name: "Bash", arguments: ":\"pwd\"}" } }] }, finish_reason: "tool_calls" }],
+  });
+  converter.end();
+
+  const start = events.find((item) => item.event === "content_block_start");
+  assert.equal(start.data.content_block.id, "call_late");
+  assert.equal(start.data.content_block.name, "Bash");
+
+  const partialJson = events
+    .filter((item) => item.event === "content_block_delta")
+    .map((item) => item.data.delta.partial_json)
+    .join("");
+  assert.equal(partialJson, "{\"command\":\"pwd\"}");
+});
+
+test("converts Anthropic thinking blocks to OpenAI reasoning_content", () => {
+  const messages = convertMessages(
+    [
+      { role: "user", content: "Explain quantum physics." },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Quantum physics is complex.", signature: "sig1" },
+          { type: "thinking", thinking: "I need to start with basic concepts.", signature: "sig2" },
+          { type: "text", text: "Let me explain step by step." },
+        ],
+      },
+    ],
+    undefined,
+    "auto",
+  );
+
+  assert.deepEqual(messages, [
+    { role: "user", content: "Explain quantum physics." },
+    {
+      role: "assistant",
+      content: "Let me explain step by step.",
+      reasoning_content: "Quantum physics is complex.\nI need to start with basic concepts.",
+    },
+  ]);
+});
+
+test("injects empty reasoning_content on assistant tool-call messages (auto mode)", () => {
+  const messages = convertMessages(
+    [
+      { role: "user", content: "Search for opencode." },
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "search", input: { query: "opencode" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "Found results." }],
+      },
+    ],
+    undefined,
+    "auto",
+  );
+
+  assert.equal(messages[1].role, "assistant");
+  assert.equal(messages[1].reasoning_content, " ");
+  assert.equal(messages[1].tool_calls.length, 1);
+});
+
+test("drops thinking blocks in drop mode", () => {
+  const messages = convertMessages(
+    [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should use a tool.", signature: "sig1" },
+          { type: "text", text: "Let me search." },
+          { type: "tool_use", id: "toolu_1", name: "search", input: { query: "test" } },
+        ],
+      },
+    ],
+    undefined,
+    "drop",
+  );
+
+  // In drop mode: no reasoning_content, but still has content and tool_calls
+  const msg = messages[0];
+  assert.equal(msg.role, "assistant");
+  assert.equal(msg.content, "Let me search.");
+  assert.equal(msg.reasoning_content, undefined);
+  assert.equal(msg.tool_calls.length, 1);
+});
+
+test("converts OpenAI reasoning_content to Anthropic thinking block", () => {
+  const response = openAIResponseToAnthropic(
+    {
+      id: "chatcmpl_1",
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "The answer is 42.",
+            reasoning_content: "Let me think about this carefully.",
+          },
+        },
+      ],
+      usage: { prompt_tokens: 5, completion_tokens: 15 },
+    },
+    "kimi-k2.6",
+    "auto",
+  );
+
+  assert.deepEqual(response.content, [
+    { type: "thinking", thinking: "Let me think about this carefully.", signature: "" },
+    { type: "text", text: "The answer is 42." },
+  ]);
+});
+
+test("converts OpenAI reasoning field to Anthropic thinking block", () => {
+  const response = openAIResponseToAnthropic(
+    {
+      id: "chatcmpl_reasoning",
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: "Done.",
+            reasoning: "Provider-specific reasoning field.",
+          },
+        },
+      ],
+      usage: { prompt_tokens: 5, completion_tokens: 15 },
+    },
+    "kimi-k2.6",
+    "auto",
+  );
+
+  assert.deepEqual(response.content, [
+    { type: "thinking", thinking: "Provider-specific reasoning field.", signature: "" },
+    { type: "text", text: "Done." },
+  ]);
+});
+
+test("preserves tool_result is_error as tool-message text", () => {
+  const messages = convertMessages([
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_error", content: "command failed", is_error: true }],
+    },
+  ]);
+
+  assert.equal(messages[0].role, "tool");
+  assert.equal(messages[0].tool_call_id, "toolu_error");
+  assert.equal(messages[0].content, "[Tool error]\ncommand failed");
+});
+
+test("streams reasoning_content as thinking blocks", () => {
+  const events = [];
+  const converter = createStreamConverter("kimi-k2.6", (event, data) => events.push({ event, data }), "auto");
+
+  converter.processChunk({ choices: [{ delta: { reasoning_content: "Let me think" } }] });
+  converter.processChunk({ choices: [{ delta: { reasoning_content: " about this." } }] });
+  converter.processChunk({ choices: [{ delta: { content: "Answer: 42" } }] });
+  converter.processChunk({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 6 } });
+  converter.end();
+
+  const blockStarts = events.filter((e) => e.event === "content_block_start");
+  assert.equal(blockStarts.length, 2); // thinking + text
+
+  // First block should be thinking
+  assert.equal(blockStarts[0].data.content_block.type, "thinking");
+
+  // Collect thinking deltas
+  const thinkingText = events
+    .filter((e) => e.event === "content_block_delta" && e.data.delta.type === "thinking_delta")
+    .map((e) => e.data.delta.thinking)
+    .join("");
+  assert.equal(thinkingText, "Let me think about this.");
+
+  // Collect text deltas
+  const textContent = events
+    .filter((e) => e.event === "content_block_delta" && e.data.delta.type === "text_delta")
+    .map((e) => e.data.delta.text)
+    .join("");
+  assert.equal(textContent, "Answer: 42");
+
+  // Verify correct event sequence
+  const eventNames = events.map((e) => e.event);
+  assert.deepEqual(eventNames, [
+    "message_start",
+    "content_block_start",  // thinking
+    "content_block_delta",   // thinking_delta
+    "content_block_delta",   // thinking_delta
+    "content_block_stop",    // thinking closed
+    "content_block_start",   // text
+    "content_block_delta",   // text_delta
+    "content_block_stop",    // text closed
+    "message_delta",
+    "message_stop",
+  ]);
+});
+
+test("streaming drop mode skips reasoning_content", () => {
+  const events = [];
+  const converter = createStreamConverter("kimi-k2.6", (event, data) => events.push({ event, data }), "drop");
+
+  converter.processChunk({ choices: [{ delta: { reasoning_content: "Hidden reasoning" } }] });
+  converter.processChunk({ choices: [{ delta: { content: "Hello" } }] });
+  converter.processChunk({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 2 } });
+  converter.end();
+
+  // No thinking blocks should appear
+  const thinkingEvents = events.filter((e) => e.data?.delta?.type === "thinking_delta");
+  assert.equal(thinkingEvents.length, 0);
+
+  // Text should still work
+  const textDeltas = events.filter((e) => e.data?.delta?.type === "text_delta");
+  assert.equal(textDeltas.length, 1);
+  assert.equal(textDeltas[0].data.delta.text, "Hello");
 });

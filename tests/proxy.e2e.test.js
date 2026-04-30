@@ -172,6 +172,63 @@ test("proxies streaming chunks as Anthropic SSE", async () => {
   }
 });
 
+test("normalizes upstream OpenAI-shaped errors to Anthropic errors", async () => {
+  const upstream = await startMockUpstream((req, res) => {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: { type: "invalid_request_error", message: "bad request" } }));
+  });
+  const proxy = await startProxy(upstream.baseUrl);
+
+  try {
+    const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": "local" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.type, "error");
+    assert.equal(body.error.type, "invalid_request_error");
+    assert.equal(body.error.message, "bad request");
+  } finally {
+    await close(proxy.server);
+    await close(upstream.server);
+  }
+});
+
+test("rejects invalid upstream success bodies instead of returning empty messages", async () => {
+  const upstream = await startMockUpstream((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end("<html>not json</html>");
+  });
+  const proxy = await startProxy(upstream.baseUrl);
+
+  try {
+    const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": "local" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.type, "error");
+    assert.equal(body.error.type, "upstream_error");
+  } finally {
+    await close(proxy.server);
+    await close(upstream.server);
+  }
+});
+
 test("returns Anthropic-shaped 404 errors", async () => {
   const upstream = await startMockUpstream(() => {});
   const proxy = await startProxy(upstream.baseUrl);
