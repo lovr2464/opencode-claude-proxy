@@ -21,6 +21,7 @@
 ## 快速开始
 
 ```bash
+chmod +x start.sh            # 仅首次需要
 ./start.sh                   # 首次运行：输入 API key → 自动创建 settings.json 并启动
 ./start.sh setup-claude      # 一次性：写入 3 个环境变量到 ~/.claude/settings.json
 ./start.sh install           # 可选：开机自启，挂了自动拉起
@@ -94,6 +95,27 @@ Listen port [8787]: ↵
 | `openai.list` | `kimi-k2.6, deepseek-v4-pro, glm-5.1, qwen3.6-plus` | 模型名，原样透传到上游 |
 | `openai.suffix_path` | `chat/completions` | 上游端点路径。Anthropic 原生模型请用 `anthropic` 组 |
 
+## 适配其他供应商
+
+默认配置针对 OpenCode Go（<https://opencode.ai/docs/zh-cn/go/>），截止 2026-04-30。如需更换供应商或模型列表，只改 `settings.json` 中三个字段：
+
+| 字段 | 改什么 |
+| --- | --- |
+| `upstream.baseUrl` | 供应商的 API 基地址。请求发到 `${baseUrl}/${suffix_path}` |
+| `model.openai.list` | 该供应商的模型 ID。原样透传到上游 |
+| `model.openai.suffix_path` | 上游端点路径。默认 `chat/completions`。Anthropic 原生模型请改用 `anthropic` 组 |
+
+示例 — 切换到假设的供应商：
+
+```json
+"upstream": { "baseUrl": "https://api.example.com/v1" },
+"model": {
+  "openai": { "list": ["their-model-v2"], "suffix_path": "chat/completions" }
+}
+```
+
+其他不用动。代理不关心上游是谁，只要它说 OpenAI Chat Completions 协议。
+
 ## 手动配置 Claude Code / Claude Desktop
 
 `./start.sh setup-claude` 可自动完成，但如果你想手动配：
@@ -122,7 +144,7 @@ Listen port [8787]: ↵
 
 ### Claude Desktop（macOS 桌面应用）
 
-打开 Claude → Settings → Developer → Edit Config，会打开 `claude_desktop_config.json`。在顶层 `"env"` 键下添加同样的配置。
+按理来说 Claude Desktop 也能配，把类似`BASE_URL` 设为代理地址，API key 用占位符，添加模型条目。未实测——请自行验证。
 
 ### 注意
 
