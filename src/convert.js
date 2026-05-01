@@ -1,4 +1,3 @@
-import { resolveModel } from "./config.js";
 
 /**
  * Convert Anthropic tools to OpenAI function tools.
@@ -247,10 +246,9 @@ function applyToolChoicePolicy(toolChoice, policy) {
 // ── Request builder ─────────────────────────────────────────────────────────
 
 export function buildOpenAIRequest(anthropicReq, config) {
-  const requestedModel = anthropicReq.model || config.defaultModel;
-  const upstreamModel = resolveModel(requestedModel, config);
+  const model = anthropicReq.model || config.defaultModel;
   const body = {
-    model: upstreamModel,
+    model,
     messages: convertMessages(anthropicReq.messages || [], anthropicReq.system, config.reasoningMode),
     max_tokens: anthropicReq.max_tokens || 4096,
     stream: anthropicReq.stream === true,
@@ -274,5 +272,5 @@ export function buildOpenAIRequest(anthropicReq, config) {
     body.stream_options = { include_usage: true };
   }
 
-  return { requestedModel, upstreamModel, body };
+  return { model, body };
 }

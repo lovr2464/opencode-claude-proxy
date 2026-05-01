@@ -1,0 +1,10 @@
+settings.json
+.githooks
+.git
+.github
+node_modules
+*.log
+.pid
+tests/
+docs/
+scripts/

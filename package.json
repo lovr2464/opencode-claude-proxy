@@ -1,8 +1,40 @@
 {
   "name": "openai-to-anthropic-api-adapter",
-  "version": "1.1.0",
-  "description": "OpenAI-compatible Chat Completions to Anthropic Messages API adapter for Claude Code",
+  "version": "1.2.0",
+  "description": "Use OpenAI-compatible models (Kimi, DeepSeek, GLM, Qwen) in Claude Code via a local protocol adapter",
   "type": "module",
+  "main": "server.js",
+  "bin": {
+    "openai-anthropic-proxy": "server.js"
+  },
+  "files": [
+    "server.js",
+    "src/",
+    "start.sh",
+    "settings.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude-code",
+    "openai",
+    "anthropic",
+    "api-adapter",
+    "proxy",
+    "opencode",
+    "kimi",
+    "deepseek",
+    "glm",
+    "qwen"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luncer/openai-to-anthropic-api-adapter"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",

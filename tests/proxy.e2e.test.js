@@ -51,9 +51,9 @@ async function startProxy(upstreamBaseUrl, overrides = {}) {
     host: "127.0.0.1",
     port: 0,
     upstreamBaseUrl,
-    defaultModel: "claude-sonnet-4-5",
-    models: ["claude-sonnet-4-5"],
-    modelMap: new Map([["claude-sonnet-4-5", "kimi-k2.6"]]),
+    defaultModel: "kimi-k2.6",
+    models: ["kimi-k2.6"],
+    modelRouting: new Map([["kimi-k2.6", { type: "openai", suffix_path: "chat/completions" }]]),
     requestTimeoutMs: 5000,
     toolChoicePolicy: "auto-on-forced",
     logLevel: "silent",
@@ -81,7 +81,7 @@ test("proxies non-streaming messages through mock OpenAI upstream", async () => 
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": "local", "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "kimi-k2.6",
         max_tokens: 64,
         system: "You are concise.",
         messages: [{ role: "user", content: "hello" }],
@@ -90,7 +90,7 @@ test("proxies non-streaming messages through mock OpenAI upstream", async () => 
 
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.model, "claude-sonnet-4-5");
+    assert.equal(body.model, "kimi-k2.6");
     assert.equal(body.content[0].text, "proxy-ok");
     assert.equal(upstream.requests[0].url, "/chat/completions");
     assert.equal(upstream.requests[0].body.model, "kimi-k2.6");
@@ -120,7 +120,7 @@ test("passes downstream API key upstream in passthrough auth mode", async () => 
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": "real-downstream-key" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "kimi-k2.6",
         max_tokens: 64,
         messages: [{ role: "user", content: "hello" }],
       }),
@@ -151,7 +151,7 @@ test("proxies streaming chunks as Anthropic SSE", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "kimi-k2.6",
         max_tokens: 64,
         stream: true,
         messages: [{ role: "user", content: "hello" }],
@@ -184,7 +184,7 @@ test("normalizes upstream OpenAI-shaped errors to Anthropic errors", async () =>
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": "local" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "kimi-k2.6",
         max_tokens: 64,
         messages: [{ role: "user", content: "hello" }],
       }),
@@ -213,7 +213,7 @@ test("rejects invalid upstream success bodies instead of returning empty message
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": "local" },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model: "kimi-k2.6",
         max_tokens: 64,
         messages: [{ role: "user", content: "hello" }],
       }),

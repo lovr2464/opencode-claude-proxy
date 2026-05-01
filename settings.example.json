@@ -8,14 +8,12 @@
   },
   "upstream": {
     "baseUrl": "https://opencode.ai/zen/go/v1",
-    "apiKey": "your-opencode-go-api-key"
+    "apiKey": "your-api-key"
   },
   "model": {
-    "claudeId": "opencode-go",
-    "upstreamId": "kimi-k2.6",
-    "list": ["opencode-go"],
-    "map": {
-      "opencode-go": "kimi-k2.6"
+    "openai": {
+      "list": ["kimi-k2.6", "deepseek-v4-pro"],
+      "suffix_path": "chat/completions"
     }
   }
 }

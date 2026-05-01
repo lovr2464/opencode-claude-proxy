@@ -6,7 +6,6 @@ import { createStreamConverter } from "../src/stream.js";
 
 const config = {
   defaultModel: "kimi-k2.6",
-  modelMap: new Map([["claude-sonnet-4-5", "kimi-k2.6"]]),
   toolChoicePolicy: "auto-on-forced",
 };
 
@@ -52,10 +51,10 @@ test("converts system, assistant text, tool_use, and tool_result blocks", () => 
   ]);
 });
 
-test("maps Claude-facing model names to upstream model names", () => {
-  const { requestedModel, upstreamModel, body } = buildOpenAIRequest(
+test("passes model name through to upstream unchanged", () => {
+  const { model, body } = buildOpenAIRequest(
     {
-      model: "claude-sonnet-4-5",
+      model: "deepseek-v4-pro",
       max_tokens: 128,
       tool_choice: { type: "tool", name: "run_shell" },
       messages: [{ role: "user", content: "hi" }],
@@ -63,24 +62,21 @@ test("maps Claude-facing model names to upstream model names", () => {
     config,
   );
 
-  assert.equal(requestedModel, "claude-sonnet-4-5");
-  assert.equal(upstreamModel, "kimi-k2.6");
-  assert.equal(body.model, "kimi-k2.6");
+  assert.equal(model, "deepseek-v4-pro");
+  assert.equal(body.model, "deepseek-v4-pro");
   assert.equal(body.tool_choice, "auto");
 });
 
-test("passes through real model names when no mapping is configured", () => {
-  const { requestedModel, upstreamModel, body } = buildOpenAIRequest(
+test("uses defaultModel when no model in request", () => {
+  const { model, body } = buildOpenAIRequest(
     {
-      model: "kimi-k2.6",
       max_tokens: 128,
       messages: [{ role: "user", content: "hi" }],
     },
-    { ...config, modelMap: new Map() },
+    config,
   );
 
-  assert.equal(requestedModel, "kimi-k2.6");
-  assert.equal(upstreamModel, "kimi-k2.6");
+  assert.equal(model, "kimi-k2.6");
   assert.equal(body.model, "kimi-k2.6");
 });
 

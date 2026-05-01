@@ -1,18 +1,33 @@
 import http from "node:http";
 import https from "node:https";
 import { pathToFileURL } from "node:url";
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
+import path from "node:path";
 
-import { buildConfig } from "./src/config.js";
+import { buildConfig, resolveModelRoute } from "./src/config.js";
 import { buildOpenAIRequest, openAIResponseToAnthropic } from "./src/convert.js";
 import { createStreamConverter } from "./src/stream.js";
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
 
+const state = { startTime: Date.now(), lastRequest: null };
+
 function log(config, method, url, status, detail) {
+  state.lastRequest = Date.now();
   if (config.logLevel === "silent") return;
   const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  const plain = `${time}  ${method}  ${status}  ${url}${detail ? `  (${detail})` : ""}`;
   const s = status >= 400 ? `\x1b[31m${status}\x1b[0m` : `\x1b[32m${status}\x1b[0m`;
   console.log(`${time}  ${method}  ${s}  ${url}${detail ? `  (${detail})` : ""}`);
+
+  // File logging
+  if (config.logFile) {
+    try {
+      const dir = path.dirname(config.logFile);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      appendFileSync(config.logFile, plain + "\n");
+    } catch {}
+  }
 }
 
 function readBody(req) {
@@ -118,6 +133,24 @@ function anthropicError(status, message, type = "api_error") {
   return { status, body: { type: "error", error: { type, message } } };
 }
 
+function friendlyError(error) {
+  const msg = error.message || String(error);
+  if (msg.includes("EAI_AGAIN") || msg.includes("ENOTFOUND")) {
+    return "Cannot reach upstream. Check your network, or verify upstream.baseUrl in settings.json.";
+  }
+  if (msg.includes("ECONNREFUSED")) {
+    return "Upstream refused connection. The service may be down or the URL may be wrong.";
+  }
+  if (msg.includes("ETIMEDOUT") || msg.includes("timeout")) {
+    return "Upstream request timed out. Try increasing proxy.requestTimeoutMs in settings.json.";
+  }
+  if (msg.includes("401") || msg.includes("403")) {
+    return "Upstream authentication failed. Check upstream.apiKey in settings.json.";
+  }
+  if (msg.includes("Missing API key")) return msg;
+  return msg;
+}
+
 function normalizeUpstreamError(status, text) {
   const parsed = safeJsonParse(text, null);
   if (parsed?.type === "error" && parsed.error?.message) return parsed;
@@ -144,46 +177,118 @@ async function handleMessages(config, req, res, url) {
     return sendJson(res, 400, anthropicError(400, error.message, "invalid_request_error").body);
   }
 
-  const { requestedModel, upstreamModel, body } = buildOpenAIRequest(anthropicReq, config);
+  const model = anthropicReq.model || config.defaultModel;
+  let route;
+  try {
+    route = resolveModelRoute(model, config);
+  } catch (error) {
+    log(config, req.method, url.pathname, 400, error.message);
+    return sendJson(res, 400, anthropicError(400, error.message, "invalid_request_error").body);
+  }
+
+  if (route.type === "anthropic") {
+    return handlePassthrough(config, req, res, anthropicReq, model, route);
+  }
+  return handleOpenAI(config, req, res, anthropicReq, model, route);
+}
+
+// ── Anthropic passthrough (no conversion) ─────────────────────────────────
+
+async function handlePassthrough(config, req, res, body, model, route) {
+  const requestPath = `/v1/${route.suffix_path}`;
   const bodyStr = JSON.stringify(body);
 
-  // ── Streaming path ────────────────────────────────────────────────────
+  // Streaming
   if (body.stream) {
-    log(config, req.method, url.pathname, 200, `stream ${requestedModel} -> ${upstreamModel}`);
+    log(config, req.method, requestPath, 200, `stream ${model} (passthrough)`);
     let upstream;
     try {
-      upstream = await upstreamRequest(config, "POST", "/chat/completions", req.headers, bodyStr);
+      upstream = await upstreamRequest(config, "POST", requestPath, req.headers, bodyStr);
     } catch (error) {
       const status = error.statusCode || 502;
-      log(config, "UPSTREAM", upstreamModel, status, error.message);
-      return sendJson(res, status, anthropicError(status, error.message, error.errorType || "upstream_error").body);
+      log(config, "UPSTREAM", model, status, error.message);
+      return sendJson(res, status, anthropicError(status, friendlyError(error), error.errorType || "upstream_error").body);
     }
 
     if (upstream.statusCode >= 400) {
       const errBody = await readBody(upstream);
-      log(config, "UPSTREAM", upstreamModel, upstream.statusCode, errBody.slice(0, 200));
+      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 200));
       return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, errBody));
     }
+
+    if (upstream.socket) upstream.socket.setNoDelay(true);
+    res.writeHead(upstream.statusCode, upstream.headers);
+    if (res.socket) res.socket.setNoDelay(true);
+    upstream.pipe(res);
+    return;
+  }
+
+  // Non-streaming
+  log(config, req.method, requestPath, 200, `${model} (passthrough)`);
+  let upstream;
+  try {
+    upstream = await upstreamRequest(config, "POST", requestPath, req.headers, bodyStr);
+  } catch (error) {
+    const status = error.statusCode || 502;
+    log(config, "UPSTREAM", model, status, error.message);
+    return sendJson(res, status, anthropicError(status, friendlyError(error), error.errorType || "upstream_error").body);
+  }
+
+  const respBody = await readBody(upstream);
+  if (upstream.statusCode >= 400) {
+    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 200));
+    return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, respBody));
+  }
+
+  res.writeHead(upstream.statusCode, upstream.headers);
+  res.end(respBody);
+}
+
+// ── OpenAI conversion path ───────────────────────────────────────────────
+
+async function handleOpenAI(config, req, res, anthropicReq, model, route) {
+  const { body } = buildOpenAIRequest(anthropicReq, config);
+  const requestPath = `/${route.suffix_path}`;
+  const bodyStr = JSON.stringify(body);
+
+  // Streaming
+  if (body.stream) {
+    log(config, req.method, requestPath, 200, `stream ${model} (openai)`);
+    let upstream;
+    try {
+      upstream = await upstreamRequest(config, "POST", requestPath, req.headers, bodyStr);
+    } catch (error) {
+      const status = error.statusCode || 502;
+      log(config, "UPSTREAM", model, status, error.message);
+      return sendJson(res, status, anthropicError(status, friendlyError(error), error.errorType || "upstream_error").body);
+    }
+
+    if (upstream.statusCode >= 400) {
+      const errBody = await readBody(upstream);
+      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 200));
+      return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, errBody));
+    }
+
+    if (upstream.socket) upstream.socket.setNoDelay(true);
 
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
       "x-robots-tag": "none",
-      "x-opencode-tool-choice-policy": config.toolChoicePolicy,
-      "x-opencode-reasoning-mode": config.reasoningMode,
     });
+    if (res.socket) res.socket.setNoDelay(true);
 
-    let buffer = "";
-    const converter = createStreamConverter(requestedModel, (event, data) => {
+    let buf = "";
+    const converter = createStreamConverter(model, (event, data) => {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     }, config.reasoningMode);
 
     upstream.on("data", (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(":")) continue;
@@ -193,45 +298,38 @@ async function handleMessages(config, req, res, url) {
         converter.processChunk(safeJsonParse(data, {}));
       }
     });
-    upstream.on("end", () => {
-      converter.end();
-      res.end();
-    });
-    upstream.on("error", () => {
-      if (!res.writableEnded) res.end();
-    });
+    upstream.on("end", () => { converter.end(); res.end(); });
+    upstream.on("error", () => { if (!res.writableEnded) res.end(); });
     return;
   }
 
-  // ── Non-streaming path ────────────────────────────────────────────────
-  log(config, req.method, url.pathname, 200, `${requestedModel} -> ${upstreamModel}`);
+  // Non-streaming
+  log(config, req.method, requestPath, 200, `${model} (openai)`);
   let upstream;
   try {
-    upstream = await upstreamRequest(config, "POST", "/chat/completions", req.headers, bodyStr);
+    upstream = await upstreamRequest(config, "POST", requestPath, req.headers, bodyStr);
   } catch (error) {
     const status = error.statusCode || 502;
-    log(config, "UPSTREAM", upstreamModel, status, error.message);
-    return sendJson(res, status, anthropicError(status, error.message, error.errorType || "upstream_error").body);
+    log(config, "UPSTREAM", model, status, error.message);
+    return sendJson(res, status, anthropicError(status, friendlyError(error), error.errorType || "upstream_error").body);
   }
 
   const respBody = await readBody(upstream);
   if (upstream.statusCode >= 400) {
-    log(config, "UPSTREAM", upstreamModel, upstream.statusCode, respBody.slice(0, 200));
+    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 200));
     return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, respBody));
   }
 
   const parsed = parseJsonStrict(respBody);
   if (!parsed.ok || !Array.isArray(parsed.value?.choices)) {
-    log(config, "UPSTREAM", upstreamModel, 502, "invalid success response");
+    log(config, "UPSTREAM", model, 502, "invalid success response");
     return sendJson(res, 502, anthropicError(502, "Invalid JSON response from upstream", "upstream_error").body);
   }
 
-  const anthropicResp = openAIResponseToAnthropic(parsed.value, requestedModel, config.reasoningMode);
+  const anthropicResp = openAIResponseToAnthropic(parsed.value, model, config.reasoningMode);
   return sendJson(res, 200, anthropicResp, {
     "x-robots-tag": "none",
     "request-id": anthropicResp.id,
-    "x-opencode-tool-choice-policy": config.toolChoicePolicy,
-    "x-opencode-reasoning-mode": config.reasoningMode,
   });
 }
 
@@ -252,15 +350,18 @@ export function createProxyServer(config = buildConfig()) {
 
     if (url.pathname === "/" || url.pathname === "/health") {
       log(config, req.method, url.pathname, 200);
+      const uptime = Math.floor((Date.now() - state.startTime) / 1000);
+      const last = state.lastRequest
+        ? Math.floor((Date.now() - state.lastRequest) / 1000)
+        : null;
       return sendJson(res, 200, {
         status: "ok",
+        uptime_seconds: uptime,
+        last_request_seconds_ago: last,
         target: config.upstreamBaseUrl,
         default_model: config.defaultModel,
         models: config.models,
-        model_map: Object.fromEntries(config.modelMap),
         auth_mode: config.authMode,
-        tool_choice_policy: config.toolChoicePolicy,
-        reasoning_mode: config.reasoningMode,
       });
     }
 
@@ -288,13 +389,8 @@ export function startServer(config = buildConfig()) {
     process.exitCode = 1;
   });
   server.listen(config.port, config.host, () => {
-    console.log(`\n  OpenAI-to-Anthropic API Adapter  v1.1.0`);
-    console.log(`  ───────────────────────────────────────`);
-    console.log(`  Listen : http://${config.host}:${config.port}`);
-    console.log(`  Target : ${config.upstreamBaseUrl}`);
-    console.log(`  Model  : ${config.defaultModel}`);
-    console.log(`  Tools  : ${config.toolChoicePolicy}`);
-    console.log();
+    const models = config.models.join(", ");
+    console.log(`  Ready: http://${config.host}:${config.port}  →  ${config.upstreamBaseUrl}  [${models}]`);
   });
   return server;
 }

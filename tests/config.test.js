@@ -1,26 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildConfig } from "../src/config.js";
+import { buildConfig, resolveModelRoute } from "../src/config.js";
 
-test("builds proxy config from settings.json shape", () => {
+test("builds config from model.openai.list", () => {
   const config = buildConfig({
     settings: {
-      proxy: {
-        host: "127.0.0.1",
-        port: 8788,
-        authMode: "proxy",
-        requestTimeoutMs: 12345,
-        logLevel: "silent",
-      },
-      upstream: {
-        baseUrl: "https://example.test/v1/",
-        apiKey: "settings-key",
-      },
+      proxy: { host: "127.0.0.1", port: 8788, authMode: "proxy", requestTimeoutMs: 12345, logLevel: "silent" },
+      upstream: { baseUrl: "https://example.test/v1/", apiKey: "settings-key" },
       model: {
-        claudeId: "opencode-go",
-        upstreamId: "kimi-k2.6",
-        list: ["opencode-go"],
+        openai: { list: ["kimi-k2.6", "deepseek-v4-pro"], suffix_path: "chat/completions" },
       },
     },
   });
@@ -28,43 +17,122 @@ test("builds proxy config from settings.json shape", () => {
   assert.equal(config.authMode, "proxy");
   assert.equal(config.port, 8788);
   assert.equal(config.upstreamBaseUrl, "https://example.test/v1");
-  assert.equal(config.apiKey, "settings-key");
-  assert.equal(config.defaultModel, "opencode-go");
-  assert.deepEqual(config.models, ["opencode-go"]);
-  assert.equal(config.modelMap.get("opencode-go"), "kimi-k2.6");
-  assert.equal(config.claudeCode.baseUrl, "http://127.0.0.1:8788");
-  assert.equal(config.claudeCode.apiKey, "opencode-go-local");
-  assert.equal(config.claudeCode.modelId, "opencode-go");
-  assert.equal(config.toolChoicePolicy, "auto-on-forced");
-  assert.equal(config.reasoningMode, "auto");
+  assert.equal(config.defaultModel, "kimi-k2.6");
+  assert.deepEqual(config.models, ["kimi-k2.6", "deepseek-v4-pro"]);
+  assert.equal(config.modelRouting.get("kimi-k2.6").type, "openai");
+  assert.equal(config.modelRouting.get("kimi-k2.6").suffix_path, "chat/completions");
 });
 
-test("adds default model mapping from upstreamId when map is omitted", () => {
+test("supports both openai and anthropic groups", () => {
   const config = buildConfig({
     settings: {
       proxy: { port: 8787, authMode: "proxy" },
-      upstream: { baseUrl: "https://settings.test/v1", apiKey: "settings-key" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
       model: {
-        claudeId: "opencode-go",
-        upstreamId: "kimi-k2.6",
-        list: ["opencode-go"],
+        openai: { list: ["kimi-k2.6"], suffix_path: "chat/completions" },
+        anthropic: { list: ["minimax-m2.7"], suffix_path: "messages" },
       },
     },
   });
 
-  assert.equal(config.defaultModel, "opencode-go");
-  assert.equal(config.modelMap.get("opencode-go"), "kimi-k2.6");
+  assert.deepEqual(config.models, ["kimi-k2.6", "minimax-m2.7"]);
+  assert.equal(config.modelRouting.get("kimi-k2.6").type, "openai");
+  assert.equal(config.modelRouting.get("minimax-m2.7").type, "anthropic");
+  assert.equal(config.modelRouting.get("minimax-m2.7").suffix_path, "messages");
 });
 
-test("requires upstream base URL in settings", () => {
+test("resolveModelRoute returns correct route", () => {
+  const config = buildConfig({
+    settings: {
+      proxy: { port: 8787, authMode: "proxy" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
+      model: {
+        openai: { list: ["kimi-k2.6"] },
+        anthropic: { list: ["minimax-m2.7"] },
+      },
+    },
+  });
+
+  assert.equal(resolveModelRoute("kimi-k2.6", config).type, "openai");
+  assert.equal(resolveModelRoute("minimax-m2.7", config).type, "anthropic");
+});
+
+test("throws when model not in any group", () => {
+  const config = buildConfig({
+    settings: {
+      proxy: { port: 8787, authMode: "proxy" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
+      model: {
+        openai: { list: ["kimi-k2.6"] },
+      },
+    },
+  });
+
+  assert.throws(() => resolveModelRoute("unknown-model", config), /not found/);
+});
+
+test("default suffix_path for openai is chat/completions", () => {
+  const config = buildConfig({
+    settings: {
+      proxy: { port: 8787, authMode: "proxy" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
+      model: { openai: { list: ["kimi"] } },
+    },
+  });
+
+  assert.equal(config.modelRouting.get("kimi").suffix_path, "chat/completions");
+});
+
+test("default suffix_path for anthropic is messages", () => {
+  const config = buildConfig({
+    settings: {
+      proxy: { port: 8787, authMode: "proxy" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
+      model: { anthropic: { list: ["mm"] } },
+    },
+  });
+
+  assert.equal(config.modelRouting.get("mm").suffix_path, "messages");
+});
+
+test("model.default picks from either group", () => {
+  const config = buildConfig({
+    settings: {
+      proxy: { port: 8787, authMode: "proxy" },
+      upstream: { baseUrl: "https://example.test/v1", apiKey: "k" },
+      model: {
+        default: "minimax-m2.7",
+        openai: { list: ["kimi-k2.6"] },
+        anthropic: { list: ["minimax-m2.7"] },
+      },
+    },
+  });
+
+  assert.equal(config.defaultModel, "minimax-m2.7");
+});
+
+test("throws when model appears in both groups", () => {
   assert.throws(
     () =>
       buildConfig({
         settings: {
-          upstream: { apiKey: "settings-key" },
-          model: { claudeId: "opencode-go", upstreamId: "kimi-k2.6" },
+          upstream: { baseUrl: "https://example.test/v1" },
+          model: {
+            openai: { list: ["duplicate"] },
+            anthropic: { list: ["duplicate"] },
+          },
         },
       }),
-    /Set upstream\.baseUrl in settings\.json/,
+    /multiple groups/,
+  );
+});
+
+test("throws when no groups configured", () => {
+  assert.throws(
+    () =>
+      buildConfig({
+        settings: { upstream: { baseUrl: "https://example.test/v1" }, model: {} },
+      }),
+    /openai.*anthropic/,
   );
 });

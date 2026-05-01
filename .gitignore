@@ -1,4 +1,6 @@
-.env
+settings.json
 node_modules/
 *.log
+.proxy.pid
 .DS_Store
+docs/
