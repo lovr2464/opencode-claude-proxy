@@ -2,7 +2,15 @@
 
 [English README](../README.md) | [Changelog](../CHANGELOG.md)
 
-**买了 OpenCode Go 套餐但 Claude Code 不支持？** 这个本地适配器帮你打通。它架在 Claude Code 和 OpenAI 兼容 API 之间，实时翻译 Anthropic↔OpenAI 协议。在 Claude Code 里用 Kimi、DeepSeek、GLM、Qwen 等模型。
+**买了 OpenCode Go 套餐但 Claude Code 不支持？** 这个本地适配器帮你打通。在 Claude Code 里用 Kimi、DeepSeek、GLM、Qwen 等模型。
+
+代理只做三件事：
+
+1. **协议翻译** — Anthropic Messages API ↔ OpenAI Chat Completions
+2. **超时控制** — 上游请求超时（`proxy.requestTimeoutMs`）
+3. **模型路由** — 哪个模型发到哪个上游端点
+
+它**不设置**模型参数（temperature、max_tokens、上下文长度等）——这些从 Claude Code 原样透传。
 
 ## 快速开始
 
@@ -79,6 +87,43 @@ Listen port [8787]: ↵
 | --- | --- | --- |
 | `openai.list` | `kimi-k2.6, deepseek-v4-pro, glm-5.1, qwen3.6-plus` | 模型名，原样透传到上游 |
 | `openai.suffix_path` | `chat/completions` | 上游端点路径。Anthropic 原生模型请用 `anthropic` 组 |
+
+## 手动配置 Claude Code / Claude Desktop
+
+`./start.sh setup-claude` 可自动完成，但如果你想手动配：
+
+### Claude Code CLI
+
+在 `~/.claude/settings.json` 中添加：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_API_KEY": "local-proxy-key",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "kimi-k2.6"
+  }
+}
+```
+
+添加多个模型槽位快速切换：
+
+```json
+"ANTHROPIC_DEFAULT_SONNET_MODEL": "kimi-k2.6",
+"ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+"ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.1"
+```
+
+### Claude Desktop（macOS 桌面应用）
+
+打开 Claude → Settings → Developer → Edit Config，会打开 `claude_desktop_config.json`。在顶层 `"env"` 键下添加同样的配置。
+
+### 注意
+
+- `ANTHROPIC_API_KEY` 在 proxy 模式下填任意非空字符串——真实 key 在 `settings.json` 里。
+- 模型名必须和 `settings.json` 中 `model.openai.list` 的条目一致。
+- `[1m]` 后缀是 Claude Code 的上下文窗口显示提示，代理发送前自动去掉。
+- 设置了多个 `DEFAULT_*_MODEL` 槽位后，在 Claude Code 里切换 Sonnet/Opus/Haiku 槽位即可切换模型。
 
 ## 故障排除
 

@@ -250,9 +250,9 @@ export function buildOpenAIRequest(anthropicReq, config) {
   const body = {
     model,
     messages: convertMessages(anthropicReq.messages || [], anthropicReq.system, config.reasoningMode),
-    max_tokens: anthropicReq.max_tokens || 4096,
     stream: anthropicReq.stream === true,
   };
+  if (anthropicReq.max_tokens !== undefined) body.max_tokens = anthropicReq.max_tokens;
 
   for (const [anthropicKey, openaiKey] of [
     ["temperature", "temperature"],

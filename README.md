@@ -2,7 +2,15 @@
 
 [中文说明](docs/README_zh.md) | [Changelog](CHANGELOG.md)
 
-**Got an OpenCode Go subscription but Claude Code doesn't support it?** This adapter bridges the gap. It sits between Claude Code and any OpenAI-compatible API, translating Anthropic↔OpenAI protocols in real time. Use Kimi, DeepSeek, GLM, Qwen, and more — all inside Claude Code.
+**Got an OpenCode Go subscription but Claude Code doesn't support it?** This adapter bridges the gap. Use Kimi, DeepSeek, GLM, Qwen, and more — all inside Claude Code.
+
+The proxy does exactly three things:
+
+1. **Protocol translation** — Anthropic Messages API ↔ OpenAI Chat Completions
+2. **Timeout control** — upstream request timeout (`proxy.requestTimeoutMs`)
+3. **Model routing** — which model goes to which upstream endpoint
+
+It does NOT set model parameters (temperature, max_tokens, context size, etc.) — those pass through from Claude Code unchanged.
 
 ## Quick Start
 
@@ -79,6 +87,43 @@ Edit `~/.claude/settings.json` and change `ANTHROPIC_CUSTOM_MODEL_OPTION` to any
 | --- | --- | --- |
 | `openai.list` | `kimi-k2.6, deepseek-v4-pro, glm-5.1, qwen3.6-plus` | Model names. Pass through to upstream unchanged |
 | `openai.suffix_path` | `chat/completions` | Upstream endpoint. For Anthropic-native models, add an `anthropic` group instead |
+
+## Manual Claude Code / Claude Desktop configuration
+
+`./start.sh setup-claude` handles this automatically, but if you prefer to configure manually:
+
+### Claude Code CLI
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_API_KEY": "local-proxy-key",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "kimi-k2.6"
+  }
+}
+```
+
+To add more models as quick-switch slots:
+
+```json
+"ANTHROPIC_DEFAULT_SONNET_MODEL": "kimi-k2.6",
+"ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+"ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.1"
+```
+
+### Claude Desktop (macOS app)
+
+Open Claude → Settings → Developer → Edit Config. This opens `claude_desktop_config.json`. Add the same `env` block under the top-level `"env"` key.
+
+### Notes
+
+- `ANTHROPIC_API_KEY` can be any non-empty string in proxy mode — the real key is in `settings.json`.
+- Model names must match entries in `settings.json` → `model.openai.list`.
+- `[1m]` suffix is a Claude Code display hint for context window size. The proxy strips it before sending upstream.
+- If you set multiple `DEFAULT_*_MODEL` slots, switch models in Claude Code by changing the active model slot (Sonnet / Opus / Haiku).
 
 ## Troubleshooting
 
