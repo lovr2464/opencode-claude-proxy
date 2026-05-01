@@ -1,6 +1,6 @@
 # OpenAI 到 Anthropic API 适配器
 
-[English README](../README.md) | [设计文档](design_zh.md) | [Design](design.md)
+[English README](../README.md) | [Changelog](../CHANGELOG.md)
 
 这是一个本地适配器：向 Claude Code 暴露 Anthropic Messages API，向上游调用 OpenAI 兼容的 Chat Completions 接口。用于在 Claude Code 中使用 Kimi、DeepSeek、Qwen 等通过 OpenCode Go（或类似服务商）提供的模型。
 
@@ -167,10 +167,8 @@ npm run doctor
 
 测试使用本地 mock 上游，不需要 API key。
 
-## 设计文档
-
-架构、协议映射、流式转换和限制见 [docs/design_zh.md](design_zh.md)。英文版见 [docs/design.md](design.md)。
-
 ## License
+
+MIT
 
 MIT
