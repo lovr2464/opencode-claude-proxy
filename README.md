@@ -12,6 +12,12 @@ The proxy does exactly three things:
 
 It does NOT set model parameters (temperature, max_tokens, context size, etc.) — those pass through from Claude Code unchanged.
 
+## Requirements
+
+- **Node.js** ≥ 18
+- **macOS** — tested and supported
+- **Linux / Windows** — not tested, may work (Node.js HTTP server, no platform-specific code) but not guaranteed
+
 ## Quick Start
 
 ```bash

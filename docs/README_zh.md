@@ -12,6 +12,12 @@
 
 它**不设置**模型参数（temperature、max_tokens、上下文长度等）——这些从 Claude Code 原样透传。
 
+## 运行环境
+
+- **Node.js** ≥ 18
+- **macOS** — 已测试，完全支持
+- **Linux / Windows** — 未测试，可能能用（仅依赖 Node.js 标准库，无平台特定代码），但不保证
+
 ## 快速开始
 
 ```bash
