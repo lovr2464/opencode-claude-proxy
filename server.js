@@ -212,15 +212,14 @@ async function handlePassthrough(config, req, res, body, model, route) {
 
     if (upstream.statusCode >= 400) {
       const errBody = await readBody(upstream);
-      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 200));
+      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 2000));
       return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, errBody));
     }
 
     if (upstream.socket) upstream.socket.setNoDelay(true);
+
     res.writeHead(upstream.statusCode, upstream.headers);
-    if (res.socket) res.socket.setNoDelay(true);
-    upstream.pipe(res);
-    return;
+    res.end(respBody);
   }
 
   // Non-streaming
@@ -236,7 +235,7 @@ async function handlePassthrough(config, req, res, body, model, route) {
 
   const respBody = await readBody(upstream);
   if (upstream.statusCode >= 400) {
-    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 200));
+    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 2000));
     return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, respBody));
   }
 
@@ -265,7 +264,7 @@ async function handleOpenAI(config, req, res, anthropicReq, model, route) {
 
     if (upstream.statusCode >= 400) {
       const errBody = await readBody(upstream);
-      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 200));
+      log(config, "UPSTREAM", model, upstream.statusCode, errBody.slice(0, 2000));
       return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, errBody));
     }
 
@@ -316,7 +315,7 @@ async function handleOpenAI(config, req, res, anthropicReq, model, route) {
 
   const respBody = await readBody(upstream);
   if (upstream.statusCode >= 400) {
-    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 200));
+    log(config, "UPSTREAM", model, upstream.statusCode, respBody.slice(0, 2000));
     return sendJson(res, upstream.statusCode, normalizeUpstreamError(upstream.statusCode, respBody));
   }
 

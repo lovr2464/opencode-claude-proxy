@@ -1,8 +1,284 @@
 
 let lastReasoningContent = ""; // cache for DeepSeek reasoning echo requirement
 
+// ── Moonshot Flavored JSON Schema (MFJS) sanitization ──────────────────────
+
+const MFJS_SUPPORTED = new Set([
+  "type", "properties", "additionalProperties", "items", "enum",
+  "required", "anyOf", "description", "$defs", "$ref", "title",
+  "$id", "default", "maxLength", "minLength", "maximum", "minimum",
+  "maxItems", "minItems", "pattern",
+]);
+
+const MFJS_VALID_TYPES = new Set([
+  "string", "number", "integer", "boolean", "null", "array", "object",
+]);
+
+const MFJS_INVALID_PROP_NAMES = new Set([
+  "$defs", "$ref", "anyOf", "required", "additionalProperties",
+]);
+
+function isInvalidPropertyName(name) {
+  if (MFJS_INVALID_PROP_NAMES.has(name)) return true;
+  // Moonshot path resolver treats {} as anyOf index markers, so property names
+  // containing braces cause "invalid path" errors.
+  if (name.includes("{") || name.includes("}")) return true;
+  return false;
+}
+
+const MFJS_MAX_DEPTH = 64;
+const MFJS_MAX_SCHEMA_SIZE = 14000; // 14 KB, leave 1 KB headroom
+
+function schemaSize(schema) {
+  return JSON.stringify(schema).length;
+}
+
+function normalizeMFJSType(typeValue) {
+  if (typeof typeValue === "string") {
+    return MFJS_VALID_TYPES.has(typeValue) ? typeValue : "object";
+  }
+  if (Array.isArray(typeValue)) {
+    const nonNull = typeValue.find((t) => t !== "null" && MFJS_VALID_TYPES.has(t));
+    return nonNull || "string";
+  }
+  return "object";
+}
+
+/**
+ * Progressive simplification: when a schema is still too large after
+ * normal sanitization, strip descriptions, then flatten nested objects,
+ * then fall back to a minimal {} schema.
+ */
+function simplifyForSize(schema) {
+  // Phase 1: strip all descriptions recursively
+  function stripDescriptions(s) {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return s;
+    const out = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (k === "description" || k === "title" || k === "$id" || k === "default") continue;
+      if (k === "properties" && v && typeof v === "object") {
+        out[k] = {};
+        for (const [pk, pv] of Object.entries(v)) {
+          out[k][pk] = stripDescriptions(pv);
+        }
+      } else if (k === "items" && v && typeof v === "object" && !Array.isArray(v)) {
+        out[k] = stripDescriptions(v);
+      } else if (k === "anyOf" && Array.isArray(v)) {
+        out[k] = v.map((item) => stripDescriptions(item));
+      } else if (k === "$defs" && v && typeof v === "object") {
+        out[k] = {};
+        for (const [dk, dv] of Object.entries(v)) {
+          out[k][dk] = stripDescriptions(dv);
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  let result = stripDescriptions(schema);
+  if (schemaSize(result) <= MFJS_MAX_SCHEMA_SIZE) return result;
+
+  // Phase 2: flatten any nested object properties to { type: "object" }
+  function flattenObjects(s, depth = 0) {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return s;
+    if (depth >= 3) {
+      // At depth >= 3, replace any object schema with a minimal one
+      const t = s.type;
+      if (t === "object") return { type: "object", properties: {} };
+      if (t === "array") return { type: "array", items: { type: "string" } };
+      if (MFJS_VALID_TYPES.has(t)) return { type: t };
+      return { type: "string" };
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (k === "properties" && v && typeof v === "object") {
+        out[k] = {};
+        for (const [pk, pv] of Object.entries(v)) {
+          out[k][pk] = flattenObjects(pv, depth + 1);
+        }
+      } else if (k === "items" && v && typeof v === "object" && !Array.isArray(v)) {
+        out[k] = flattenObjects(v, depth + 1);
+      } else if (k === "anyOf" && Array.isArray(v)) {
+        out[k] = v.map((item) => flattenObjects(item, depth + 1));
+      } else if (k === "$defs" && v && typeof v === "object") {
+        out[k] = {};
+        for (const [dk, dv] of Object.entries(v)) {
+          out[k][dk] = flattenObjects(dv, depth + 1);
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  result = flattenObjects(result);
+  if (schemaSize(result) <= MFJS_MAX_SCHEMA_SIZE) return result;
+
+  // Phase 3: flatten everything at depth >= 2
+  function flattenAll(s, depth = 0) {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return s;
+    if (depth >= 2) {
+      const t = s.type;
+      if (t === "object") return { type: "object", properties: {} };
+      if (t === "array") return { type: "array", items: { type: "string" } };
+      if (MFJS_VALID_TYPES.has(t)) return { type: t };
+      return { type: "string" };
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (k === "properties" && v && typeof v === "object") {
+        out[k] = {};
+        for (const [pk, pv] of Object.entries(v)) {
+          out[k][pk] = flattenAll(pv, depth + 1);
+        }
+      } else if (k === "items" && v && typeof v === "object" && !Array.isArray(v)) {
+        out[k] = flattenAll(v, depth + 1);
+      } else if (k === "anyOf" && Array.isArray(v)) {
+        out[k] = v.map((item) => flattenAll(item, depth + 1));
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  result = flattenAll(result);
+  if (schemaSize(result) <= MFJS_MAX_SCHEMA_SIZE) return result;
+
+  // Phase 4: nuclear option - empty object schema
+  return { type: "object", properties: {} };
+}
+
+export function sanitizeForMoonshot(schema, depth = 0) {
+  if (depth > MFJS_MAX_DEPTH) return { type: "object", properties: {} };
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return { type: "object", properties: {} };
+  }
+
+  const result = {};
+
+  // 1. Keep only supported keywords
+  for (const key of Object.keys(schema)) {
+    if (MFJS_SUPPORTED.has(key)) {
+      result[key] = schema[key];
+    }
+  }
+
+  // 2. MFJS rule: when anyOf is present, parent-level keywords that overlap
+  //    with branch keywords cause "conflicting keywords found in anyOf".
+  //    Push parent keywords into each branch, then delete from parent.
+  if (Array.isArray(result.anyOf)) {
+    const parentKeys = Object.keys(result).filter(
+      (k) => k !== "anyOf" && k !== "description" && k !== "title" && k !== "$defs",
+    );
+    for (const key of parentKeys) {
+      for (const branch of result.anyOf) {
+        if (!branch || typeof branch !== "object" || Array.isArray(branch)) continue;
+        if (branch[key] === undefined) {
+          branch[key] = result[key];
+        } else if (key === "properties") {
+          branch[key] = { ...result[key], ...branch[key] };
+        } else if (key === "required") {
+          const parentReq = Array.isArray(result[key]) ? result[key] : [];
+          const branchReq = Array.isArray(branch[key]) ? branch[key] : [];
+          branch[key] = [...new Set([...parentReq, ...branchReq])];
+        }
+        // For other keys (type, items, etc.) branch takes precedence
+      }
+      delete result[key];
+    }
+
+    // Recursively clean anyOf branches
+    result.anyOf = result.anyOf
+      .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+      .map((item) => sanitizeForMoonshot(item, depth + 1));
+    if (result.anyOf.length === 0) {
+      delete result.anyOf;
+    }
+  }
+
+  // 3. Normalize type to a single string (default to object when missing)
+  if (result.type !== undefined) {
+    result.type = normalizeMFJSType(result.type);
+  } else if (!result.anyOf && !result.$ref) {
+    result.type = "object";
+  }
+
+  // 4. Ensure properties exists for object schemas
+  if (result.type === "object" && (!result.properties || typeof result.properties !== "object" || Array.isArray(result.properties))) {
+    result.properties = {};
+  }
+
+  // 5. Ensure required is a subset of properties (auto-create missing ones)
+  if (Array.isArray(result.required) && result.properties && typeof result.properties === "object") {
+    for (const req of result.required) {
+      if (typeof req === "string" && !Object.prototype.hasOwnProperty.call(result.properties, req)) {
+        result.properties[req] = {};
+      }
+    }
+    const propNames = new Set(Object.keys(result.properties));
+    result.required = result.required.filter((r) => typeof r === "string" && propNames.has(r));
+    if (result.required.length === 0) {
+      delete result.required;
+    }
+  }
+
+  // 6. Recursively clean properties (and drop invalid property names)
+  if (result.properties && typeof result.properties === "object") {
+    const cleanedProps = {};
+    for (const [propName, propSchema] of Object.entries(result.properties)) {
+      if (!isInvalidPropertyName(propName)) {
+        cleanedProps[propName] = sanitizeForMoonshot(propSchema, depth + 1);
+      }
+    }
+    result.properties = cleanedProps;
+  }
+
+  // 7. Recursively clean items
+  if (result.items && typeof result.items === "object" && !Array.isArray(result.items)) {
+    result.items = sanitizeForMoonshot(result.items, depth + 1);
+  }
+
+  // 8. Recursively clean additionalProperties (if object)
+  if (result.additionalProperties && typeof result.additionalProperties === "object" && !Array.isArray(result.additionalProperties)) {
+    result.additionalProperties = sanitizeForMoonshot(result.additionalProperties, depth + 1);
+  }
+
+  // 9. Recursively clean $defs
+  if (result.$defs && typeof result.$defs === "object" && !Array.isArray(result.$defs)) {
+    const cleanedDefs = {};
+    for (const [defName, defSchema] of Object.entries(result.$defs)) {
+      if (defName && typeof defName === "string" && !defName.includes("/") && !defName.includes("{") && !defName.includes("}")) {
+        cleanedDefs[defName] = sanitizeForMoonshot(defSchema, depth + 1);
+      }
+    }
+    result.$defs = cleanedDefs;
+  }
+
+  // 10. MFJS rule: type cannot coexist with $ref in the same schema
+  if (result.$ref && result.type) {
+    delete result.type;
+  }
+
+  // 11. Size guard: Moonshot enforces a 15000-byte JSON limit on the schema.
+  //     If we exceed it, progressively strip descriptions, flatten nested
+  //     objects, and finally fall back to a minimal {} schema.
+  if (schemaSize(result) > MFJS_MAX_SCHEMA_SIZE) {
+    return simplifyForSize(result);
+  }
+
+  return result;
+}
+
 /**
  * Convert Anthropic tools to OpenAI function tools.
+ *
+ * Moonshot/Kimi requires parameters to explicitly declare type: "object"
+ * and a properties field (even if empty), otherwise it rejects the request
+ * with "tools.function.parameters is not a valid moonshot flavored ...".
  */
 export function convertTools(anthropicTools) {
   if (!anthropicTools?.length) return [];
@@ -14,7 +290,7 @@ export function convertTools(anthropicTools) {
       function: {
         name: tool.name,
         description: tool.description || "",
-        parameters: tool.input_schema || { type: "object" },
+        parameters: sanitizeForMoonshot(tool.input_schema),
       },
     }));
 }

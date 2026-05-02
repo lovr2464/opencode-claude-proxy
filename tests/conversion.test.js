@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildOpenAIRequest, convertMessages, openAIResponseToAnthropic } from "../src/convert.js";
+import { buildOpenAIRequest, convertMessages, convertTools, openAIResponseToAnthropic } from "../src/convert.js";
 import { createStreamConverter } from "../src/stream.js";
 
 const config = {
@@ -396,4 +396,239 @@ test("streaming drop mode skips reasoning_content", () => {
   const textDeltas = events.filter((e) => e.data?.delta?.type === "text_delta");
   assert.equal(textDeltas.length, 1);
   assert.equal(textDeltas[0].data.delta.text, "Hello");
+});
+
+test("normalizes tool parameters with type and properties for Moonshot compatibility", () => {
+  const tools = convertTools([
+    {
+      name: "get_weather",
+      description: "Get weather",
+      input_schema: { description: "Weather params" }, // missing type and properties
+    },
+    {
+      name: "no_schema",
+      description: "No schema tool",
+      // input_schema is missing entirely
+    },
+    {
+      name: "valid_schema",
+      description: "Valid schema",
+      input_schema: { type: "object", properties: { city: { type: "string" } } },
+    },
+  ]);
+
+  assert.equal(tools.length, 3);
+  assert.equal(tools[0].function.parameters.type, "object");
+  assert.deepEqual(tools[0].function.parameters.properties, {});
+  assert.equal(tools[0].function.parameters.description, "Weather params");
+
+  assert.equal(tools[1].function.parameters.type, "object");
+  assert.deepEqual(tools[1].function.parameters.properties, {});
+
+  assert.equal(tools[2].function.parameters.type, "object");
+  assert.deepEqual(tools[2].function.parameters.properties, { city: { type: "string" } });
+});
+
+test("sanitizes MFJS schema: strips unsupported keywords and normalizes type arrays", () => {
+  const tools = convertTools([
+    {
+      name: "complex_tool",
+      description: "Complex tool",
+      input_schema: {
+        type: "object",
+        properties: {
+          name: { type: ["string", "null"], format: "email", minLength: 1 },
+          count: { type: "integer", allOf: [{ minimum: 0 }] },
+          nested: {
+            type: "object",
+            properties: {
+              $ref: { type: "string" }, // invalid property name
+              value: { type: "number", exclusiveMinimum: 0 },
+            },
+            required: ["value", "missing"],
+          },
+        },
+        required: ["name", "nonexistent"],
+      },
+    },
+  ]);
+
+  const params = tools[0].function.parameters;
+
+  // Root type and properties preserved
+  assert.equal(params.type, "object");
+  assert.ok(params.properties.name);
+  assert.ok(params.properties.count);
+  assert.ok(params.properties.nested);
+
+  // Type array normalized to single string
+  assert.equal(params.properties.name.type, "string");
+
+  // Unsupported keywords removed
+  assert.equal(params.properties.name.format, undefined);
+  assert.equal(params.properties.count.allOf, undefined);
+
+  // Nested object cleaned
+  assert.equal(params.properties.nested.properties.$ref, undefined);
+  assert.equal(params.properties.nested.properties.value.type, "number");
+  assert.equal(params.properties.nested.properties.value.exclusiveMinimum, undefined);
+
+  // Missing required props are auto-created so required stays intact
+  assert.deepEqual(params.required, ["name", "nonexistent"]);
+  assert.ok(params.properties.nonexistent);
+
+  assert.deepEqual(params.properties.nested.required, ["value", "missing"]);
+  assert.ok(params.properties.nested.properties.missing);
+});
+
+test("sanitizes MFJS schema: handles null and missing input_schema", () => {
+  const tools = convertTools([
+    { name: "a", input_schema: null },
+    { name: "b", input_schema: undefined },
+    { name: "c", input_schema: "not an object" },
+    { name: "d", input_schema: [1, 2, 3] },
+  ]);
+
+  for (const tool of tools) {
+    assert.equal(tool.function.parameters.type, "object");
+    assert.deepEqual(tool.function.parameters.properties, {});
+  }
+});
+
+test("sanitizes MFJS schema: auto-simplifies when schema exceeds 14 KB", () => {
+  // Build a huge schema with many long descriptions
+  const bigProps = {};
+  for (let i = 0; i < 200; i++) {
+    bigProps[`field_${i}`] = {
+      type: "string",
+      description: "a".repeat(200),
+    };
+  }
+  const tools = convertTools([
+    {
+      name: "huge_tool",
+      input_schema: {
+        type: "object",
+        properties: bigProps,
+      },
+    },
+  ]);
+
+  const params = tools[0].function.parameters;
+  const size = JSON.stringify(params).length;
+  assert.ok(size <= 15000, `Schema size ${size} exceeds 15000 bytes`);
+  assert.equal(params.type, "object");
+});
+
+test("sanitizes MFJS schema: removes type when anyOf is present", () => {
+  const tools = convertTools([
+    {
+      name: "status_tool",
+      input_schema: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            anyOf: [
+              { enum: ["active"], description: "Active state" },
+              { enum: ["inactive"], description: "Inactive state" },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  const statusSchema = tools[0].function.parameters.properties.status;
+  assert.equal(statusSchema.type, undefined);
+  assert.equal(statusSchema.anyOf.length, 2);
+});
+
+test("sanitizes MFJS schema: removes type when $ref is present", () => {
+  const tools = convertTools([
+    {
+      name: "ref_tool",
+      input_schema: {
+        type: "object",
+        properties: {
+          data: {
+            type: "object",
+            $ref: "#/$defs/Data",
+          },
+        },
+        $defs: {
+          Data: { type: "string" },
+        },
+      },
+    },
+  ]);
+
+  const dataSchema = tools[0].function.parameters.properties.data;
+  assert.equal(dataSchema.type, undefined);
+  assert.equal(dataSchema.$ref, "#/$defs/Data");
+});
+
+test("sanitizes MFJS schema: pushes parent properties into anyOf branches", () => {
+  const tools = convertTools([
+    {
+      name: "parent_anyof_tool",
+      input_schema: {
+        type: "object",
+        properties: {
+          parent: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+            },
+            anyOf: [
+              { properties: { name: { type: "string" } } },
+              { properties: { age: { type: "integer" } } },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  const parentSchema = tools[0].function.parameters.properties.parent;
+  // Parent should have lost its own properties/type because anyOf exists
+  assert.equal(parentSchema.properties, undefined);
+  assert.equal(parentSchema.type, undefined);
+
+  // Each branch should contain merged properties
+  assert.equal(parentSchema.anyOf.length, 2);
+  assert.ok(parentSchema.anyOf[0].properties.id);
+  assert.ok(parentSchema.anyOf[0].properties.name);
+  assert.ok(parentSchema.anyOf[1].properties.id);
+  assert.ok(parentSchema.anyOf[1].properties.age);
+});
+
+test("sanitizes MFJS schema: pushes parent required into anyOf branches", () => {
+  const tools = convertTools([
+    {
+      name: "req_anyof_tool",
+      input_schema: {
+        type: "object",
+        properties: {
+          action: {
+            type: "object",
+            properties: {
+              cmd: { type: "string" },
+              path: { type: "string" },
+            },
+            required: ["cmd"],
+            anyOf: [
+              { required: ["path"] },
+              { required: ["url"] },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+
+  const actionSchema = tools[0].function.parameters.properties.action;
+  assert.equal(actionSchema.required, undefined);
+  assert.deepEqual(actionSchema.anyOf[0].required.sort(), ["cmd", "path"]);
+  assert.deepEqual(actionSchema.anyOf[1].required.sort(), ["cmd", "url"]);
 });

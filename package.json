@@ -1,6 +1,6 @@
 {
   "name": "openai-to-anthropic-api-adapter",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Use OpenAI-compatible models (Kimi, DeepSeek, GLM, Qwen) in Claude Code via a local protocol adapter",
   "type": "module",
   "main": "server.js",

@@ -25,7 +25,17 @@ if [ "$CMD" = "stop" ]; then
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
-      kill "$PID"
+      kill "$PID" 2>/dev/null
+      # Wait up to 3s for graceful shutdown
+      for i in 1 2 3; do
+        if ! kill -0 "$PID" 2>/dev/null; then break; fi
+        sleep 1
+      done
+      # Force kill if still alive
+      if kill -0 "$PID" 2>/dev/null; then
+        kill -9 "$PID" 2>/dev/null
+        sleep 1
+      fi
       rm -f "$PID_FILE"
       echo -e "  ${GREEN}Proxy stopped (PID $PID)${NC}"
     else
@@ -65,7 +75,17 @@ fi
 
 if [ "$CMD" = "restart" ]; then
   "$0" stop
-  sleep 1
+  # Read port from settings
+  RPORT=$(node -e "import { buildConfig, loadConfigSources } from './src/config.js'; console.log(buildConfig(loadConfigSources()).port)" 2>/dev/null || echo 8787)
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! lsof -ti :"$RPORT" >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  if lsof -ti :"$RPORT" >/dev/null 2>&1; then
+    echo -e "  ${RED}Error: Port $RPORT is still in use after 10s. Force killing...${NC}"
+    kill -9 $(lsof -ti :"$RPORT") 2>/dev/null || true
+    sleep 2
+  fi
   exec "$0" start
 fi
 
@@ -310,9 +330,11 @@ fi
 
 if lsof -ti :"$PORT" >/dev/null 2>&1; then
   echo ""
-  echo -e "  ${YELLOW}Port $PORT is already in use. Kill the existing process:${NC}"
-  echo "    kill -9 \$(lsof -ti :$PORT)"
-  echo ""
+  echo -e "  ${GREEN}Proxy already running on port $PORT${NC}"
+  echo "  ./start.sh status   — check details"
+  echo "  ./start.sh restart  — restart"
+  echo "  ./start.sh stop     — stop"
+  exit 0
 fi
 
 # ── Claude Code config hint ──────────────────────────────────────────────────
@@ -334,7 +356,8 @@ echo ""
 
 echo "  Starting ..."
 echo ""
-nohup node server.js > /dev/null 2>&1 &
+# Redirect stdout/stderr to proxy.log so console.log/debug output is visible
+nohup node server.js >> "$LOG_FILE" 2>&1 &
 PID=$!
 echo "$PID" > "$PID_FILE"
 echo -e "  ${GREEN}Proxy started (PID $PID)${NC}"
