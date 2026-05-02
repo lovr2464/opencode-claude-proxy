@@ -22,28 +22,40 @@ read_config() {
 # ── Daemon commands ───────────────────────────────────────────────────────────
 
 if [ "$CMD" = "stop" ]; then
+  STOPPED=0
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
       kill "$PID" 2>/dev/null
-      # Wait up to 3s for graceful shutdown
       for i in 1 2 3; do
         if ! kill -0 "$PID" 2>/dev/null; then break; fi
         sleep 1
       done
-      # Force kill if still alive
       if kill -0 "$PID" 2>/dev/null; then
         kill -9 "$PID" 2>/dev/null
         sleep 1
       fi
-      rm -f "$PID_FILE"
       echo -e "  ${GREEN}Proxy stopped (PID $PID)${NC}"
-    else
-      rm -f "$PID_FILE"
-      echo -e "  ${YELLOW}Proxy not running (stale PID file removed)${NC}"
+      STOPPED=1
     fi
-  else
-    echo -e "  ${YELLOW}Proxy not running (no PID file)${NC}"
+    rm -f "$PID_FILE"
+  fi
+
+  # Fallback: kill by port if PID file missing or stale
+  RPORT=$(node -e "import { buildConfig, loadConfigSources } from './src/config.js'; console.log(buildConfig(loadConfigSources()).port)" 2>/dev/null || echo 8787)
+  ORPHAN_PID=$(lsof -ti :"$RPORT" 2>/dev/null)
+  if [ -n "$ORPHAN_PID" ]; then
+    # Verify it's our server.js before killing
+    CMDLINE=$(ps -p "$ORPHAN_PID" -o args= 2>/dev/null || echo "")
+    if echo "$CMDLINE" | grep -q "server.js"; then
+      kill -9 "$ORPHAN_PID" 2>/dev/null
+      echo -e "  ${GREEN}Proxy stopped (orphan PID $ORPHAN_PID)${NC}"
+      STOPPED=1
+    fi
+  fi
+
+  if [ "$STOPPED" -eq 0 ]; then
+    echo -e "  ${YELLOW}Proxy not running${NC}"
   fi
   exit 0
 fi
@@ -53,8 +65,7 @@ if [ "$CMD" = "status" ]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
       echo -e "  ${GREEN}Proxy running (PID $PID)${NC}"
-      # Hit health endpoint for details
-      HEALTH=$(curl -s http://127.0.0.1:8787/health 2>/dev/null)
+      HEALTH=$(curl -s "http://127.0.0.1:${PORT:-8787}/health" 2>/dev/null)
       if [ -n "$HEALTH" ]; then
         UPTIME=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); u=d.get('uptime_seconds',0); print(f'{u//3600}h {(u%3600)//60}m {u%60}s')" 2>/dev/null)
         LAST=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); l=d.get('last_request_seconds_ago'); print(f'{l}s ago') if l is not None else print('never')" 2>/dev/null)
@@ -64,12 +75,27 @@ if [ "$CMD" = "status" ]; then
         echo "  Models: $MODELS"
       fi
       echo "  Log: tail -f $LOG_FILE"
+      exit 0
     else
-      echo -e "  ${RED}Proxy not running (stale PID file)${NC}"
+      rm -f "$PID_FILE"
+      echo -e "  ${YELLOW}Stale PID file removed${NC}"
     fi
-  else
-    echo -e "  ${YELLOW}Proxy not running${NC}"
   fi
+
+  # Check for orphan process (no PID file but port in use)
+  RPORT=$(node -e "import { buildConfig, loadConfigSources } from './src/config.js'; console.log(buildConfig(loadConfigSources()).port)" 2>/dev/null || echo 8787)
+  ORPHAN_PID=$(lsof -ti :"$RPORT" 2>/dev/null)
+  if [ -n "$ORPHAN_PID" ]; then
+    CMDLINE=$(ps -p "$ORPHAN_PID" -o args= 2>/dev/null || echo "")
+    if echo "$CMDLINE" | grep -q "server.js"; then
+      echo -e "  ${YELLOW}Proxy running (orphan PID $ORPHAN_PID, no PID file)${NC}"
+      echo "  ./start.sh stop     — stop and clean up"
+      echo "  Log: tail -f $LOG_FILE"
+      exit 0
+    fi
+  fi
+
+  echo -e "  ${YELLOW}Proxy not running${NC}"
   exit 0
 fi
 
@@ -329,12 +355,23 @@ fi
 # ── Port check ───────────────────────────────────────────────────────────────
 
 if lsof -ti :"$PORT" >/dev/null 2>&1; then
-  echo ""
-  echo -e "  ${GREEN}Proxy already running on port $PORT${NC}"
-  echo "  ./start.sh status   — check details"
-  echo "  ./start.sh restart  — restart"
-  echo "  ./start.sh stop     — stop"
-  exit 0
+  OCCUPANT_PID=$(lsof -ti :"$PORT" 2>/dev/null)
+  CMDLINE=$(ps -p "$OCCUPANT_PID" -o args= 2>/dev/null || echo "")
+  if echo "$CMDLINE" | grep -q "server.js"; then
+    echo ""
+    echo -e "  ${GREEN}Proxy already running on port $PORT (PID $OCCUPANT_PID)${NC}"
+    echo "$OCCUPANT_PID" > "$PID_FILE"
+    echo "  PID file recovered."
+    echo "  ./start.sh status   — check details"
+    echo "  ./start.sh restart  — restart"
+    echo "  ./start.sh stop     — stop"
+    exit 0
+  else
+    echo ""
+    echo -e "  ${RED}Error: Port $PORT is occupied by another process (PID $OCCUPANT_PID)${NC}"
+    echo "  $CMDLINE"
+    exit 1
+  fi
 fi
 
 # ── Claude Code config hint ──────────────────────────────────────────────────
