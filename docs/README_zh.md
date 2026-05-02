@@ -163,10 +163,12 @@ Listen port [8787]: ↵
 
 **代理无响应。** 跑 `./start.sh status` 检查。重启：`./start.sh restart`。
 
+**`/context` 显示 0 tokens。** 上游（OpenCode Go）在流式模式下不返回 usage 数据。这只是显示问题——Claude Code 会在上下文快满时自动警告。建议定期用 `/clear` 清空上下文。
+
 ## 开发
 
 ```bash
-npm test        # 30 个测试，不需要 API key
+npm test        # 38 个测试，不需要 API key
 npm run dev     # 文件变更自动重启
 ```
 

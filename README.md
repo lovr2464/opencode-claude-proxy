@@ -163,6 +163,8 @@ In theory, Claude Desktop should work the same way: set something like`BASE_URL`
 
 **Proxy not responding.** Run `./start.sh status`. Restart: `./start.sh restart`.
 
+**`/context` shows 0 tokens.** Upstream (OpenCode Go) does not return usage data in streaming mode. This is cosmetic only — Claude Code will warn you automatically when context is near full. Use `/clear` periodically to stay safe.
+
 ## Development
 
 ```bash
