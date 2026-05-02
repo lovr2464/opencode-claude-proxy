@@ -12,7 +12,15 @@
   - Pushes parent `properties`/`required` into `anyOf` branches to avoid keyword conflicts
   - Filters invalid property names (e.g. `{{userName}}`) that break Moonshot path parser
   - Progressive size simplification: strips descriptions → flattens nested objects → falls back to `{}` when schema exceeds 14 KB (Moonshot limit 15 KB)
-- **start.sh reliability**: `stop` now SIGKILL after graceful timeout, `restart` waits up to 10s and force-kills stale processes, stdout/stderr appends to `proxy.log`
+- **start.sh reliability**:
+  - `stop` detects orphan processes by port when PID file is missing
+  - `stop` detects LaunchAgent-managed instances and warns instead of silently failing
+  - `status` detects orphan processes and shows LaunchAgent state
+  - `start` recovers PID file when port is occupied by our server.js
+  - `restart` waits up to 10s and force-kills stale processes
+  - `install` checks server.js syntax before creating LaunchAgent
+  - `setup-claude` creates `~/.claude/` directory if missing
+  - stdout/stderr appends to `proxy.log` (was `/dev/null`)
 - **Error log truncation**: passthrough path now logs up to 2000 chars (was 200)
 
 ## 1.2.0 — 2026-05-01

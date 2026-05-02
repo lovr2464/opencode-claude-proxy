@@ -22,6 +22,14 @@ read_config() {
 # ── Daemon commands ───────────────────────────────────────────────────────────
 
 if [ "$CMD" = "stop" ]; then
+  # Detect LaunchAgent-managed instance
+  if launchctl list 2>/dev/null | grep -q "com.opencode.anthropic-proxy"; then
+    echo -e "  ${YELLOW}Proxy is managed by LaunchAgent (auto-restart on).${NC}"
+    echo "  Use './start.sh uninstall' to stop permanently."
+    echo "  Or: launchctl unload ~/Library/LaunchAgents/com.opencode.anthropic-proxy.plist"
+    exit 1
+  fi
+
   STOPPED=0
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
@@ -61,10 +69,18 @@ if [ "$CMD" = "stop" ]; then
 fi
 
 if [ "$CMD" = "status" ]; then
+  LAUNCHD_ACTIVE=0
+  if launchctl list 2>/dev/null | grep -q "com.opencode.anthropic-proxy"; then
+    LAUNCHD_ACTIVE=1
+  fi
+
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
       echo -e "  ${GREEN}Proxy running (PID $PID)${NC}"
+      if [ "$LAUNCHD_ACTIVE" -eq 1 ]; then
+        echo -e "  ${CYAN}Managed by LaunchAgent (auto-restart on login)${NC}"
+      fi
       HEALTH=$(curl -s "http://127.0.0.1:${PORT:-8787}/health" 2>/dev/null)
       if [ -n "$HEALTH" ]; then
         UPTIME=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); u=d.get('uptime_seconds',0); print(f'{u//3600}h {(u%3600)//60}m {u%60}s')" 2>/dev/null)
@@ -89,10 +105,19 @@ if [ "$CMD" = "status" ]; then
     CMDLINE=$(ps -p "$ORPHAN_PID" -o args= 2>/dev/null || echo "")
     if echo "$CMDLINE" | grep -q "server.js"; then
       echo -e "  ${YELLOW}Proxy running (orphan PID $ORPHAN_PID, no PID file)${NC}"
+      if [ "$LAUNCHD_ACTIVE" -eq 1 ]; then
+        echo -e "  ${CYAN}Managed by LaunchAgent (auto-restart on login)${NC}"
+      fi
       echo "  ./start.sh stop     — stop and clean up"
       echo "  Log: tail -f $LOG_FILE"
       exit 0
     fi
+  fi
+
+  if [ "$LAUNCHD_ACTIVE" -eq 1 ]; then
+    echo -e "  ${YELLOW}LaunchAgent installed but proxy is not currently running${NC}"
+    echo "  It will auto-start on next login."
+    exit 0
   fi
 
   echo -e "  ${YELLOW}Proxy not running${NC}"
@@ -116,6 +141,11 @@ if [ "$CMD" = "restart" ]; then
 fi
 
 if [ "$CMD" = "install" ]; then
+  if ! node --check server.js 2>/dev/null; then
+    echo -e "  ${RED}Error: server.js has syntax errors. Fix before installing.${NC}"
+    exit 1
+  fi
+
   PLIST="com.opencode.anthropic-proxy.plist"
   PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST"
   PROXY_DIR="$(pwd)"
@@ -177,6 +207,7 @@ if [ "$CMD" = "uninstall" ]; then
 fi
 
 if [ "$CMD" = "setup-claude" ]; then
+  mkdir -p "$HOME/.claude"
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
   CONFIG_JSON=$(read_config)
