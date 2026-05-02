@@ -207,8 +207,17 @@ if [ "$CMD" = "uninstall" ]; then
 fi
 
 if [ "$CMD" = "setup-claude" ]; then
-  mkdir -p "$HOME/.claude"
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+
+  if [ ! -f "$CLAUDE_SETTINGS" ]; then
+    echo -e "  ${RED}Claude Code settings not found at $CLAUDE_SETTINGS${NC}"
+    echo "  This proxy requires Claude Code. Install it first:"
+    echo "    https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview"
+    echo ""
+    echo "  Then configure manually by adding to $CLAUDE_SETTINGS:"
+    echo '    {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:<port>", "ANTHROPIC_API_KEY": "local-proxy-key"}}'
+    exit 1
+  fi
 
   CONFIG_JSON=$(read_config)
   DEFAULT_MODEL=$(echo "$CONFIG_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['defaultModel'])")

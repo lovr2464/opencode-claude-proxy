@@ -166,7 +166,7 @@ In theory, Claude Desktop should work the same way: set something like`BASE_URL`
 ## Development
 
 ```bash
-npm test        # 30 tests, no API key needed
+npm test        # 38 tests, no API key needed
 npm run dev     # auto-restart on file changes
 ```
 

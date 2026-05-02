@@ -19,7 +19,7 @@
   - `start` recovers PID file when port is occupied by our server.js
   - `restart` waits up to 10s and force-kills stale processes
   - `install` checks server.js syntax before creating LaunchAgent
-  - `setup-claude` creates `~/.claude/` directory if missing
+  - `setup-claude` validates Claude Code is installed before modifying settings
   - stdout/stderr appends to `proxy.log` (was `/dev/null`)
 - **Error log truncation**: passthrough path now logs up to 2000 chars (was 200)
 
