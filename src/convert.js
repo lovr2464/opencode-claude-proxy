@@ -1,4 +1,6 @@
 
+let lastReasoningContent = ""; // cache for DeepSeek reasoning echo requirement
+
 /**
  * Convert Anthropic tools to OpenAI function tools.
  */
@@ -12,7 +14,7 @@ export function convertTools(anthropicTools) {
       function: {
         name: tool.name,
         description: tool.description || "",
-        parameters: tool.input_schema || { type: "object", properties: {} },
+        parameters: tool.input_schema || { type: "object" },
       },
     }));
 }
@@ -77,7 +79,7 @@ function makeAssistantMessage(texts, toolCalls, reasoningContent, reasoningMode)
       // tool-call messages when thinking is enabled. Use the extracted
       // Anthropic thinking text when available; otherwise inject a non-empty
       // placeholder because Kimi treats an empty string like a missing field.
-      message.reasoning_content = reasoningContent || " ";
+      message.reasoning_content = reasoningContent || lastReasoningContent || " ";
     }
   } else if (reasoningContent) {
     // Text-only assistant message that had preceding thinking blocks
@@ -183,6 +185,7 @@ export function openAIResponseToAnthropic(openaiResp, requestedModel, reasoningM
 
   // Convert reasoning_content to an Anthropic thinking block
   const reasoning = msg.reasoning_content || msg.reasoning;
+  if (reasoning) lastReasoningContent = reasoning; // cache for DeepSeek echo
   if (reasoning && reasoningMode !== "drop") {
     content.push({
       type: "thinking",
