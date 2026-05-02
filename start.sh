@@ -22,15 +22,17 @@ read_config() {
 # ── Daemon commands ───────────────────────────────────────────────────────────
 
 if [ "$CMD" = "stop" ]; then
-  # Detect LaunchAgent-managed instance
-  if launchctl list 2>/dev/null | grep -q "com.opencode.anthropic-proxy"; then
-    echo -e "  ${YELLOW}Proxy is managed by LaunchAgent (auto-restart on).${NC}"
-    echo "  Use './start.sh uninstall' to stop permanently."
-    echo "  Or: launchctl unload ~/Library/LaunchAgents/com.opencode.anthropic-proxy.plist"
-    exit 1
+  STOPPED=0
+  PLIST="$HOME/Library/LaunchAgents/com.opencode.anthropic-proxy.plist"
+  LAUNCHD_ACTIVE=0
+
+  # Check if managed by LaunchAgent
+  if [ -f "$PLIST" ] && launchctl list 2>/dev/null | awk '{print $3}' | grep -q "^com.opencode.anthropic-proxy$"; then
+    LAUNCHD_ACTIVE=1
+    launchctl unload "$PLIST" 2>/dev/null
+    echo -e "  ${GREEN}LaunchAgent unloaded${NC}"
   fi
 
-  STOPPED=0
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
@@ -53,7 +55,6 @@ if [ "$CMD" = "stop" ]; then
   RPORT=$(node -e "import { buildConfig, loadConfigSources } from './src/config.js'; console.log(buildConfig(loadConfigSources()).port)" 2>/dev/null || echo 8787)
   ORPHAN_PID=$(lsof -ti :"$RPORT" 2>/dev/null)
   if [ -n "$ORPHAN_PID" ]; then
-    # Verify it's our server.js before killing
     CMDLINE=$(ps -p "$ORPHAN_PID" -o args= 2>/dev/null || echo "")
     if echo "$CMDLINE" | grep -q "server.js"; then
       kill -9 "$ORPHAN_PID" 2>/dev/null
@@ -64,6 +65,10 @@ if [ "$CMD" = "stop" ]; then
 
   if [ "$STOPPED" -eq 0 ]; then
     echo -e "  ${YELLOW}Proxy not running${NC}"
+  fi
+
+  if [ "$LAUNCHD_ACTIVE" -eq 1 ]; then
+    echo -e "  ${YELLOW}LaunchAgent removed — proxy will not auto-restart on login.${NC}"
   fi
   exit 0
 fi
@@ -125,7 +130,15 @@ if [ "$CMD" = "status" ]; then
 fi
 
 if [ "$CMD" = "restart" ]; then
+  PLIST="$HOME/Library/LaunchAgents/com.opencode.anthropic-proxy.plist"
+  LAUNCHD_ACTIVE=0
+  if [ -f "$PLIST" ] && launchctl list 2>/dev/null | awk '{print $3}' | grep -q "^com.opencode.anthropic-proxy$"; then
+    LAUNCHD_ACTIVE=1
+    launchctl unload "$PLIST" 2>/dev/null
+  fi
+
   "$0" stop
+
   # Read port from settings
   RPORT=$(node -e "import { buildConfig, loadConfigSources } from './src/config.js'; console.log(buildConfig(loadConfigSources()).port)" 2>/dev/null || echo 8787)
   for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -136,6 +149,12 @@ if [ "$CMD" = "restart" ]; then
     echo -e "  ${RED}Error: Port $RPORT is still in use after 10s. Force killing...${NC}"
     kill -9 $(lsof -ti :"$RPORT") 2>/dev/null || true
     sleep 2
+  fi
+
+  if [ "$LAUNCHD_ACTIVE" -eq 1 ]; then
+    launchctl load "$PLIST"
+    echo -e "  ${GREEN}Proxy restarted via LaunchAgent${NC}"
+    exit 0
   fi
   exec "$0" start
 fi
